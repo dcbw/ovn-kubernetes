@@ -78,6 +78,19 @@ func setOVSExternalIDs(nodeName string, ids ...string) error {
 }
 
 func setupOVNNode(nodeName, kubeServer, kubeToken, kubeCACert string) error {
+	// Tell ovn-controller which certificates to use to talk to the southbound DB.
+	// Must happen *before* setting "ovn-remote".
+	if config.OvnSouth.ClientAuth.Scheme == config.OvnDBSchemeSSL {
+		if _, stderr, err := util.RunOVSVsctl(
+			"set-ssl",
+			config.OvnSouth.ClientAuth.PrivKey,
+			config.OvnSouth.ClientAuth.Cert,
+			config.OvnSouth.ClientAuth.CACert,
+		); err != nil {
+			return fmt.Errorf("error setting ovn-controller SSL options: %v\n  %q", err, stderr)
+		}
+	}
+
 	// Tell ovn-*bctl how to talk to the database
 	for _, auth := range []*config.OvnDBAuth{
 		config.OvnNorth.ClientAuth,
