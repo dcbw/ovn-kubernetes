@@ -83,9 +83,10 @@ sudo mkdir -p /opt/cni/bin/
 # Install OVN+K8S Integration
 mkdir -p $HOME/work/src/github.com/openvswitch
 pushd $HOME/work/src/github.com/openvswitch
-git clone https://github.com/openvswitch/ovn-kubernetes
+git clone https://github.com/dcbw/ovn-kubernetes.git
 popd
 pushd $HOME/work/src/github.com/openvswitch/ovn-kubernetes/go-controller
+git checkout no-service-start2
 make 1>&2 2>/dev/null
 sudo make install
 popd
