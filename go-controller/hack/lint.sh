@@ -6,6 +6,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+pushd "${WHAT:-.}"
 for d in $(find . -type d -not -iwholename '*.git*' -a -not -iname '.tool' -a -not -iwholename '*vendor*' -a -not -iname '_output'); do
 	echo "Linting ${d}"
 	${GOPATH}/bin/gometalinter.v1 \
@@ -23,3 +24,4 @@ for d in $(find . -type d -not -iwholename '*.git*' -a -not -iname '.tool' -a -n
 		 --tests \
 		 --deadline=240s "${d}"
 done
+popd

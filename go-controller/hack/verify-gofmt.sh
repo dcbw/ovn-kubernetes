@@ -12,6 +12,7 @@ find_files() {
     \) -name '*.go'
 }
 
+pushd "${WHAT:-.}"
 GOFMT="gofmt -s"
 bad_files=$(find_files | xargs $GOFMT -l)
 if [[ -n "${bad_files}" ]]; then
@@ -19,3 +20,4 @@ if [[ -n "${bad_files}" ]]; then
   echo "${bad_files}"
   exit 1
 fi
+popd
