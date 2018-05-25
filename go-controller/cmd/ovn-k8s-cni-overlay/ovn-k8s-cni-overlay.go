@@ -17,6 +17,7 @@ import (
 	"github.com/containernetworking/cni/pkg/version"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/wait"
+	kexec "k8s.io/utils/exec"
 
 	"github.com/openvswitch/ovn-kubernetes/go-controller/cmd/ovn-k8s-cni-overlay/app"
 	"github.com/openvswitch/ovn-kubernetes/go-controller/pkg/config"
@@ -88,7 +89,7 @@ func initConfig(ctx *cli.Context, args *skel.CmdArgs) (*config.OVNNetConf, error
 		return nil, fmt.Errorf("failed to load netconf: %v", err)
 	}
 
-	if _, err := config.InitConfigWithPath(ctx, conf.ConfigFilePath, &config.Defaults{
+	if _, err := config.InitConfigWithPath(ctx, kexec.New(), conf.ConfigFilePath, &config.Defaults{
 		K8sAPIServer: true,
 		K8sToken:     true,
 		K8sCert:      true,
