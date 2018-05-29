@@ -148,8 +148,8 @@ func (cluster *OvnClusterController) watchNamespaceUpdate(node *kapi.Node,
 				if newMasterIP != oldMasterIP {
 					err := cluster.updateOvnNode(newMasterIP, node, subnet)
 					if err != nil {
-						logrus.Errorf("Failed to update OVN node with new ",
-							"masterIP %s: %v", newMasterIP, err)
+						logrus.Errorf("Failed to update OVN node with new masterIP %s: %v",
+							newMasterIP, err)
 					}
 				}
 			},
