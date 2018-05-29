@@ -10,6 +10,9 @@ import (
 
 	"github.com/urfave/cli"
 	kexec "k8s.io/utils/exec"
+	fakeexec "k8s.io/utils/exec/testing"
+
+	ovntest "github.com/openvswitch/ovn-kubernetes/go-controller/pkg/testing"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -183,6 +186,95 @@ var _ = Describe("Config Operations", func() {
 				Expect(a.host).To(Equal(""))
 				Expect(a.port).To(Equal(""))
 			}
+			return nil
+		}
+		err := app.Run([]string{app.Name, "-config-file=" + cfgFile.Name()})
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("reads defaults from ovs-vsctl external IDs", func() {
+		app.Action = func(ctx *cli.Context) error {
+			// k8s-api-server
+			fakeCmds := ovntest.AddFakeCmd(nil, &ovntest.ExpectedCmd{
+				Cmd:    "ovs-vsctl --timeout=5 --if-exists get Open_vSwitch . external_ids:k8s-api-server",
+				Output: "https://somewhere.com:8081",
+			})
+
+			// k8s-api-token
+			fakeCmds = ovntest.AddFakeCmd(fakeCmds, &ovntest.ExpectedCmd{
+				Cmd:    "ovs-vsctl --timeout=5 --if-exists get Open_vSwitch . external_ids:k8s-api-token",
+				Output: "asadfasdfasrw3atr3r3rf33fasdaa3233",
+			})
+			// k8s-ca-certificate
+			fname, err := createTempFile("kube-cacert.pem")
+			Expect(err).NotTo(HaveOccurred())
+			fakeCmds = ovntest.AddFakeCmd(fakeCmds, &ovntest.ExpectedCmd{
+				Cmd:    "ovs-vsctl --timeout=5 --if-exists get Open_vSwitch . external_ids:k8s-ca-certificate",
+				Output: fname,
+			})
+			// ovn-nb address
+			fakeCmds = ovntest.AddFakeCmd(fakeCmds, &ovntest.ExpectedCmd{
+				Cmd:    "ovs-vsctl --timeout=5 --if-exists get Open_vSwitch . external_ids:ovn-nb",
+				Output: "tcp:1.1.1.1:6441",
+			})
+
+			fexec := &fakeexec.FakeExec{
+				CommandScript: fakeCmds,
+				LookPathFunc: func(file string) (string, error) {
+					return fmt.Sprintf("/fake-bin/%s", file), nil
+				},
+			}
+
+			cfgPath, err := InitConfig(ctx, fexec, &Defaults{
+				OvnNorthAddress: true,
+				K8sAPIServer:    true,
+				K8sToken:        true,
+				K8sCert:         true,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgPath).To(Equal(cfgFile.Name()))
+			Expect(fexec.CommandCalls).To(Equal(len(fakeCmds)))
+
+			Expect(Kubernetes.APIServer).To(Equal("https://somewhere.com:8081"))
+			Expect(Kubernetes.CACert).To(Equal(fname))
+			Expect(Kubernetes.Token).To(Equal("asadfasdfasrw3atr3r3rf33fasdaa3233"))
+
+			Expect(OvnNorth.ClientAuth.Scheme).To(Equal(OvnDBSchemeTCP))
+			Expect(OvnNorth.ClientAuth.URL).To(Equal("tcp://1.1.1.1:6441"))
+			Expect(OvnNorth.ClientAuth.PrivKey).To(Equal(""))
+			Expect(OvnNorth.ClientAuth.Cert).To(Equal(""))
+			Expect(OvnNorth.ClientAuth.CACert).To(Equal(""))
+			Expect(OvnNorth.ClientAuth.server).To(BeFalse())
+			Expect(OvnNorth.ClientAuth.host).To(Equal("1.1.1.1"))
+			Expect(OvnNorth.ClientAuth.port).To(Equal("6441"))
+
+			Expect(OvnSouth.ClientAuth.Scheme).To(Equal(OvnDBSchemeUnix))
+			Expect(OvnSouth.ClientAuth.URL).To(Equal(""))
+			Expect(OvnSouth.ClientAuth.PrivKey).To(Equal(""))
+			Expect(OvnSouth.ClientAuth.Cert).To(Equal(""))
+			Expect(OvnSouth.ClientAuth.CACert).To(Equal(""))
+			Expect(OvnSouth.ClientAuth.server).To(BeFalse())
+			Expect(OvnSouth.ClientAuth.host).To(Equal(""))
+			Expect(OvnSouth.ClientAuth.port).To(Equal(""))
+
+			Expect(OvnNorth.ServerAuth.Scheme).To(Equal(OvnDBSchemeTCP))
+			Expect(OvnNorth.ServerAuth.URL).To(Equal("tcp://1.1.1.1:6441"))
+			Expect(OvnNorth.ServerAuth.PrivKey).To(Equal(""))
+			Expect(OvnNorth.ServerAuth.Cert).To(Equal(""))
+			Expect(OvnNorth.ServerAuth.CACert).To(Equal(""))
+			Expect(OvnNorth.ServerAuth.server).To(BeTrue())
+			Expect(OvnNorth.ServerAuth.host).To(Equal("1.1.1.1"))
+			Expect(OvnNorth.ServerAuth.port).To(Equal("6441"))
+
+			Expect(OvnSouth.ServerAuth.Scheme).To(Equal(OvnDBSchemeUnix))
+			Expect(OvnSouth.ServerAuth.URL).To(Equal(""))
+			Expect(OvnSouth.ServerAuth.PrivKey).To(Equal(""))
+			Expect(OvnSouth.ServerAuth.Cert).To(Equal(""))
+			Expect(OvnSouth.ServerAuth.CACert).To(Equal(""))
+			Expect(OvnSouth.ServerAuth.server).To(BeTrue())
+			Expect(OvnSouth.ServerAuth.host).To(Equal(""))
+			Expect(OvnSouth.ServerAuth.port).To(Equal(""))
+
 			return nil
 		}
 		err := app.Run([]string{app.Name, "-config-file=" + cfgFile.Name()})
