@@ -725,6 +725,7 @@ func (a *OvnDBAuth) ensureCACert() error {
 		args = append(args, "--certificate="+a.Cert)
 		args = append(args, "--bootstrap-ca-cert="+a.CACert)
 	}
+	args = append(args, "list", "nb_global")
 	_, _ = rawExec(a.exec, "ovn-nbctl", args...)
 	if _, err := os.Stat(a.CACert); os.IsNotExist(err) {
 		logrus.Warnf("bootstrapping %s CA certificate failed", a.CACert)
