@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/sirupsen/logrus"
 	kexec "k8s.io/utils/exec"
 
 	"github.com/openvswitch/ovn-kubernetes/go-controller/pkg/config"
@@ -102,47 +103,40 @@ func GetExec() kexec.Interface {
 	return runner.exec
 }
 
-// RunOVSOfctl runs a command via ovs-ofctl.
-func RunOVSOfctl(args ...string) (string, string, error) {
+func run(cmdPath string, args ...string) (*bytes.Buffer, *bytes.Buffer, error) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
-
-	cmd := runner.exec.Command(runner.ofctlPath, args...)
+	cmd := runner.exec.Command(cmdPath, args...)
 	cmd.SetStdout(stdout)
 	cmd.SetStderr(stderr)
-
+	logrus.Debugf("exec: %s %s", cmdPath, strings.Join(args, " "))
 	err := cmd.Run()
+	if err != nil {
+		logrus.Debugf("exec: %s %s => %v", cmdPath, strings.Join(args, " "), err)
+	}
+	return stdout, stderr, err
+}
+
+// RunOVSOfctl runs a command via ovs-ofctl.
+func RunOVSOfctl(args ...string) (string, string, error) {
+	stdout, stderr, err := run(runner.ofctlPath, args...)
 	return strings.Trim(stdout.String(), "\" \n"), stderr.String(), err
 }
 
 // RunOVSVsctl runs a command via ovs-vsctl.
 func RunOVSVsctl(args ...string) (string, string, error) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
 	cmdArgs := []string{fmt.Sprintf("--timeout=%d", ovsCommandTimeout)}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := runner.exec.Command(runner.vsctlPath, cmdArgs...)
-	cmd.SetStdout(stdout)
-	cmd.SetStderr(stderr)
-
-	err := cmd.Run()
+	stdout, stderr, err := run(runner.vsctlPath, cmdArgs...)
 	return strings.Trim(strings.TrimSpace(stdout.String()), "\""), stderr.String(), err
 }
 
 // RunOVNNbctlUnix runs command via ovn-nbctl, with ovn-nbctl using the unix
 // domain sockets to connect to the ovsdb-server backing the OVN NB database.
 func RunOVNNbctlUnix(args ...string) (string, string, error) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
 	cmdArgs := []string{fmt.Sprintf("--timeout=%d", ovsCommandTimeout)}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := runner.exec.Command(runner.nbctlPath, cmdArgs...)
-	cmd.SetStdout(stdout)
-	cmd.SetStderr(stderr)
-
-	err := cmd.Run()
+	stdout, stderr, err := run(runner.nbctlPath, cmdArgs...)
 	return strings.Trim(strings.TrimFunc(stdout.String(), unicode.IsSpace), "\""),
 		stderr.String(), err
 }
@@ -150,9 +144,6 @@ func RunOVNNbctlUnix(args ...string) (string, string, error) {
 // RunOVNNbctlWithTimeout runs command via ovn-nbctl with a specific timeout
 func RunOVNNbctlWithTimeout(timeout int, args ...string) (string, string,
 	error) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
 	var cmdArgs []string
 	if config.OvnNorth.ClientAuth.Scheme == config.OvnDBSchemeSSL {
 		cmdArgs = []string{
@@ -169,11 +160,7 @@ func RunOVNNbctlWithTimeout(timeout int, args ...string) (string, string,
 
 	cmdArgs = append(cmdArgs, fmt.Sprintf("--timeout=%d", timeout))
 	cmdArgs = append(cmdArgs, args...)
-	cmd := runner.exec.Command(runner.nbctlPath, cmdArgs...)
-	cmd.SetStdout(stdout)
-	cmd.SetStderr(stderr)
-
-	err := cmd.Run()
+	stdout, stderr, err := run(runner.nbctlPath, cmdArgs...)
 	return strings.Trim(strings.TrimSpace(stdout.String()), "\""), stderr.String(), err
 }
 
@@ -184,27 +171,13 @@ func RunOVNNbctl(args ...string) (string, string, error) {
 
 // RunIP runs a command via the iproute2 "ip" utility
 func RunIP(args ...string) (string, string, error) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
-	cmd := runner.exec.Command(runner.ipPath, args...)
-	cmd.SetStdout(stdout)
-	cmd.SetStderr(stderr)
-
-	err := cmd.Run()
+	stdout, stderr, err := run(runner.ipPath, args...)
 	return strings.TrimSpace(stdout.String()), stderr.String(), err
 }
 
 // RawExec runs the given command via the exec interface. Should only be used
 // for early calls before configuration is read.
 func RawExec(cmdPath string, args ...string) (string, string, error) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
-	cmd := runner.exec.Command(cmdPath, args...)
-	cmd.SetStdout(stdout)
-	cmd.SetStderr(stderr)
-
-	err := cmd.Run()
+	stdout, stderr, err := run(cmdPath, args...)
 	return strings.TrimSpace(stdout.String()), stderr.String(), err
 }

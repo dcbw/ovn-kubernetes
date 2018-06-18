@@ -104,10 +104,6 @@ type OvnAuthConfig struct {
 	ServerAuth *OvnDBAuth
 }
 
-func (a *OvnAuthConfig) String() string {
-	return fmt.Sprintf("&{ClientAuth:%+v ServerAuth:%+v}", a.ClientAuth, a.ServerAuth)
-}
-
 // Holds values read from the config file or command-line that are then
 // synthesized into OvnDBAuth structures in an OvnAuthConfig object
 type rawOvnAuthConfig struct {
@@ -385,8 +381,10 @@ func rawExec(exec kexec.Interface, cmd string, args ...string) (string, error) {
 		return "", err
 	}
 
+	logrus.Debugf("exec: %s %s", cmdPath, strings.Join(args, " "))
 	out, err := exec.Command(cmdPath, args...).CombinedOutput()
 	if err != nil {
+		logrus.Debugf("exec: %s %s => %v", cmdPath, strings.Join(args, " "), err)
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
