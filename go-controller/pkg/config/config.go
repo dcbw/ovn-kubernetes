@@ -104,6 +104,10 @@ type OvnAuthConfig struct {
 	ServerAuth *OvnDBAuth
 }
 
+func (a *OvnAuthConfig) String() string {
+	return fmt.Sprintf("&{ClientAuth:%+v ServerAuth:%+v}", a.ClientAuth, a.ServerAuth)
+}
+
 // Holds values read from the config file or command-line that are then
 // synthesized into OvnDBAuth structures in an OvnAuthConfig object
 type rawOvnAuthConfig struct {
