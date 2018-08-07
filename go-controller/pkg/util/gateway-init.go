@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+const (
+	onhostGatewayIP = "169.254.33.1"
+	onhostGatewayCIDR = onhostGatewayIP+"/24"
+	onhostGatewayIP2  = "169.254.33.2"
+)
+
+
 // GetK8sClusterRouter returns back the OVN distibuted router
 func GetK8sClusterRouter() (string, error) {
 	k8sClusterRouter, stderr, err := RunOVNNbctl("--data=bare",
@@ -83,42 +90,66 @@ func generateGatewayIP() (string, error) {
 	n, _ := ipStartNet.Mask.Size()
 	for !ipStart.Equal(ipMax) {
 		ipStart = NextIP(ipStart)
-		used := 0
+		if ipStart.Equal(ipMax) {
+			break
+		}
+		used := false
 		for _, v := range ips {
 			ipCompare, _, _ := net.ParseCIDR(v)
 			if ipStart.String() == ipCompare.String() {
-				used = 1
+				used = true
 				break
 			}
 		}
-		if used == 1 {
-			continue
-		} else {
-			break
+		if !used {
+			return fmt.Sprintf("%s/%d", ipStart.String(), n), nil
 		}
+		// Jump over gateway second address
+		ipStart = NextIP(ipStart)
 	}
-	ipMask := fmt.Sprintf("%s/%d", ipStart.String(), n)
-	return ipMask, nil
+	return "", fmt.Errorf("ran out of gateway IPs")
+}
+
+func getMacForIp(iface, ip string) (string, error) {
+	stdout, stderr, err := RunIP("neigh", "show", "dev", iface, "to", ip)
+	if err != nil {
+		return "", fmt.Errorf("failed to read %q ARP table entries, stderr:%s (%v)", iface, stderr, err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) < 1 {
+		return "", fmt.Errorf("got empty ARP table output")
+	}
+	items := strings.Split(lines[0], " ")
+	if len(items) < 3 {
+		return "", fmt.Errorf("failed to parse ARP entry output %q", lines[0])
+	}
+	if _, err := net.ParseMAC(items[2]); err != nil {
+		return "", fmt.Errorf("failed to read default gateway ARP table entry, stderr:%s (%v)", stderr, err)
+	}
+	return items[2], nil
+}
+
+func getIpAsHex(ipStr string) (string, error) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return "", fmt.Errorf("failed to parse IP %q", ipStr)
+	}
+	if ip.To4() != nil {
+		ip = ip.To4()
+	}
+	asHex := ""
+	for i := 0; i < len(ip); i++ {
+		asHex += fmt.Sprintf("%02x", ip[i])
+	}
+	return asHex, nil
 }
 
 // GatewayInit creates a gateway router for the local chassis.
-func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
-	bridgeInterface, defaultGW, rampoutIPSubnet string,
+func GatewayInit(clusterIPSubnet, nodeName, physicalIntf, physicalCIDR, physicalMacAddress,
+	defaultGW, rampoutIPSubnet string,
 	gatewayLBEnable bool) error {
 
-	ip, physicalIPNet, err := net.ParseCIDR(nicIP)
-	if err != nil {
-		logrus.Errorf("error parsing %s (%v)", nicIP, err)
-		return err
-	}
-	n, _ := physicalIPNet.Mask.Size()
-	physicalIPMask := fmt.Sprintf("%s/%d", ip.String(), n)
-	physicalIP := ip.String()
-
-	if defaultGW != "" {
-		defaultgwByte := net.ParseIP(defaultGW)
-		defaultGW = defaultgwByte.String()
-	}
+	physicalIP, _, _ := net.ParseCIDR(physicalCIDR)
 
 	k8sClusterRouter, err := GetK8sClusterRouter()
 	if err != nil {
@@ -134,7 +165,7 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 	gatewayRouter := "GR_" + nodeName
 	stdout, stderr, err := RunOVNNbctl("--", "--may-exist", "lr-add",
 		gatewayRouter, "--", "set", "logical_router", gatewayRouter,
-		"options:chassis="+systemID, "external_ids:physical_ip="+physicalIP)
+		"options:chassis="+systemID)
 	if err != nil {
 		logrus.Errorf("Failed to create logical router %v, stdout: %q, "+
 			"stderr: %q, error: %v", gatewayRouter, stdout, stderr, err)
@@ -191,6 +222,18 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 		routerIP = strings.Trim(stdout, "[]\"")
 	}
 
+	// Tag the gateway router with its externalIP
+	rip, rnet, err := net.ParseCIDR(routerIP)
+	rnet.IP = rip
+	lrCIDR := net.IPNet{IP: NextIP(rip), Mask:rnet.Mask}
+	stdout, stderr, err = RunOVNNbctl("set", "logical_router", gatewayRouter,
+		"external_ids:external_ip="+lrCIDR.String())
+	if err != nil {
+		logrus.Errorf("Failed to create logical router %v, stdout: %q, "+
+			"stderr: %q, error: %v", gatewayRouter, stdout, stderr, err)
+		return err
+	}
+
 	// Connect the switch "join" to the router.
 	stdout, stderr, err = RunOVNNbctl("--", "--may-exist", "lsp-add",
 		"join", "jtor-"+gatewayRouter, "--", "set", "logical_switch_port",
@@ -205,7 +248,7 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 
 	// Add a static route in GR with distributed router as the nexthop.
 	stdout, stderr, err = RunOVNNbctl("--may-exist", "lr-route-add",
-		gatewayRouter, clusterIPSubnet, "100.64.1.1")
+		gatewayRouter, clusterIPSubnet, "100.64.1.1", "rtoj-"+gatewayRouter)
 	if err != nil {
 		logrus.Errorf("Failed to add a static route in GR with distributed "+
 			"router as the nexthop, stdout: %q, stderr: %q, error: %v",
@@ -223,7 +266,7 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 		return err
 	}
 
-	if gatewayLBEnable {
+	if false {
 		// Create 2 load-balancers for north-south traffic for each gateway
 		// router.  One handles UDP and another handles TCP.
 		var k8sNSLbTCP, k8sNSLbUDP string
@@ -287,99 +330,127 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 
 	// Create the external switch for the physical interface to connect to.
 	externalSwitch := "ext_" + nodeName
-	stdout, stderr, err = RunOVNNbctl("--may-exist", "ls-add",
-		externalSwitch)
+	stdout, stderr, err = RunOVNNbctl("--may-exist", "ls-add", externalSwitch)
 	if err != nil {
 		logrus.Errorf("Failed to create logical switch, stdout: %q, "+
 			"stderr: %q, error: %v", stdout, stderr, err)
 		return err
 	}
 
-	var ifaceID, macAddress string
-	if physicalInterface != "" {
-		// Connect physical interface to br-int. Get its mac address.
-		ifaceID = physicalInterface + "_" + nodeName
-		stdout, stderr, err = RunOVSVsctl("--", "--may-exist", "add-port",
-			"br-int", physicalInterface, "--", "set", "interface",
-			physicalInterface, "external-ids:iface-id="+ifaceID)
-		if err != nil {
-			logrus.Errorf("Failed to add port to br-int, stdout: %q, "+
-				"stderr: %q, error: %v", stdout, stderr, err)
-			return err
-		}
-		macAddress, stderr, err = RunOVSVsctl("--if-exists", "get",
-			"interface", physicalInterface, "mac_in_use")
-		if err != nil {
-			logrus.Errorf("Failed to get macAddress, stderr: %q, error: %v",
-				stderr, err)
-			return err
-		}
-
-		// Flush the IP address of the physical interface.
-		_, _, err = RunIP("addr", "flush", "dev", physicalInterface)
-		if err != nil {
-			return err
-		}
-	} else {
-		// A OVS bridge's mac address can change when ports are added to it.
-		// We cannot let that happen, so make the bridge mac address permanent.
-		macAddress, stderr, err = RunOVSVsctl("--if-exists", "get",
-			"interface", bridgeInterface, "mac_in_use")
-		if err != nil {
-			logrus.Errorf("Failed to get macAddress, stderr: %q, error: %v",
-				stderr, err)
-			return err
-		}
-		if macAddress == "" {
-			return fmt.Errorf("No mac_address found for the bridge-interface")
-		}
-		stdout, stderr, err = RunOVSVsctl("set", "bridge",
-			bridgeInterface, "other-config:hwaddr="+macAddress)
-		if err != nil {
-			logrus.Errorf("Failed to set bridge, stdout: %q, stderr: %q, "+
-				"error: %v", stdout, stderr, err)
-			return err
-		}
-		ifaceID = bridgeInterface + "_" + nodeName
-
-		// Connect bridge interface to br-int via patch ports.
-		patch1 := "k8s-patch-br-int-" + bridgeInterface
-		patch2 := "k8s-patch-" + bridgeInterface + "-br-int"
-
-		stdout, stderr, err = RunOVSVsctl("--may-exist", "add-port",
-			bridgeInterface, patch2, "--", "set", "interface", patch2,
-			"type=patch", "options:peer="+patch1)
-		if err != nil {
-			logrus.Errorf("Failed to add port, stdout: %q, stderr: %q, "+
-				"error: %v", stdout, stderr, err)
-			return err
-		}
-
-		stdout, stderr, err = RunOVSVsctl("--may-exist", "add-port",
-			"br-int", patch1, "--", "set", "interface", patch1, "type=patch",
-			"options:peer="+patch2, "external-ids:iface-id="+ifaceID)
-		if err != nil {
-			logrus.Errorf("Failed to add port, stdout: %q, stderr: %q, "+
-				"error: %v", stdout, stderr, err)
-			return err
-		}
+	// Create a rampout OVS bridge.
+	extBridgeName := "br-ext"
+	_, stderr, err = RunOVSVsctl("--may-exist", "add-br", extBridgeName)
+	if err != nil {
+		return fmt.Errorf("Failed to create rampout bridge %s, "+
+			"stderr:%s (%v)", extBridgeName, stderr, err)
 	}
+	_, stderr, err = RunIP("link", "set", extBridgeName, "up")
+	if err != nil {
+		return fmt.Errorf("failed to up %s, stderr:%s (%v)", extBridgeName, stderr, err)
+	}
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "del-flows", extBridgeName)
+	if err != nil {
+		return fmt.Errorf("Failed to clear rampout bridge %s, "+
+			"stderr:%s (%v)", extBridgeName, stderr, err)
+	}
+
+	offhostIntf := "offhost"
+	_, stderr, err = RunOVSVsctl("--may-exist", "add-port",
+		extBridgeName, offhostIntf, "--", "set", "Interface", offhostIntf,
+		"ofport_request=2", "type=internal")
+	if err != nil {
+		return fmt.Errorf("Failed to create rampout bridge %s offhost "+
+			"interface %s, stderr:%s (%v)", extBridgeName, offhostIntf,
+			stderr, err)
+	}
+	_, stderr, err = RunIP("link", "set", offhostIntf, "up")
+	if err != nil {
+		return fmt.Errorf("failed to up %s, stderr:%s (%v)", offhostIntf, stderr, err)
+	}
+
+	onhostIntf := "onhost"
+	_, stderr, err = RunOVSVsctl("--may-exist", "add-port",
+		extBridgeName, onhostIntf, "--", "set", "Interface", onhostIntf,
+		"ofport_request=3", "type=internal")
+	if err != nil {
+		return fmt.Errorf("Failed to create rampout bridge %s onhost "+
+			"interface %s, stderr:%s (%v)", extBridgeName, onhostIntf,
+			stderr, err)
+	}
+	_, stderr, err = RunIP("link", "set", onhostIntf, "up")
+	if err != nil {
+		return fmt.Errorf("failed to up %s, stderr:%s (%v)", offhostIntf, stderr, err)
+	}
+	_, stderr, err = RunIP("addr", "add", "dev", onhostIntf, onhostGatewayCIDR)
+	if err != nil  && !strings.Contains(stderr, "File exists") {
+		return fmt.Errorf("failed to set address on %s, stderr:%s (%v)", onhostIntf, stderr, err)
+	}
+	intf, err := net.InterfaceByName(onhostIntf)
+	if err != nil {
+		return err
+	}
+	onhostMac := intf.HardwareAddr.String()
+	_, stderr, err = RunIP("neigh", "replace", onhostGatewayIP2, "lladdr", onhostMac, "dev", onhostIntf)
+	if err != nil {
+		return fmt.Errorf("failed to set onhost static ARP, stderr:%s (%v)", stderr, err)
+	}
+
+	// Link rampout bridge and OVN bridge
+	rampExt := "ext"
+	rampInt := "int"
+	extIfaceID := rampExt + "_" + nodeName
+
+if true {
+	_, stderr, err = RunIP("link", "add", "dev", rampInt, "type", "veth", "peer", "name", rampExt)
+	if err != nil {
+		return fmt.Errorf("failed to add int/ext, stderr:%s (%v)", stderr, err)
+	}
+	_, stderr, err = RunIP("link", "set", rampInt, "up")
+	if err != nil {
+		return fmt.Errorf("failed to up %s, stderr:%s (%v)", rampInt, stderr, err)
+	}
+	_, stderr, err = RunIP("link", "set", rampExt, "up")
+	if err != nil {
+		return fmt.Errorf("failed to up %s, stderr:%s (%v)", rampExt, stderr, err)
+	}
+
+	_, stderr, err = RunOVSVsctl("--may-exist",
+	        "add-port", "br-int", rampInt, "--", 
+		"add-port", extBridgeName, rampExt, "--",
+		"set", "Interface", rampInt, "external-ids:iface-id="+extIfaceID)
+	if err != nil {
+		return fmt.Errorf("Failed to create rampout patch ports %s/%s"+
+			", stderr:%s (%v)", rampExt, rampInt, stderr, err)
+	}
+} else {
+	_, stderr, err = RunOVSVsctl("--may-exist",
+	        "add-port", "br-int", rampInt, "--", 
+		"add-port", extBridgeName, rampExt, "--",
+		"set", "Interface", rampInt, "type=patch", "options:peer="+rampExt, "external-ids:iface-id="+extIfaceID, "--",
+		"set", "Interface", rampExt, "type=patch", "options:peer="+rampInt, "ofport_request=11")
+	if err != nil {
+		return fmt.Errorf("Failed to create rampout patch ports %s/%s"+
+			", stderr:%s (%v)", rampExt, rampInt, stderr, err)
+	}
+}
 
 	// Add external interface as a logical port to external_switch.
 	// This is a learning switch port with "unknown" address. The external
 	// world is accessed via this port.
 	stdout, stderr, err = RunOVNNbctl("--", "--may-exist", "lsp-add",
-		externalSwitch, ifaceID, "--", "lsp-set-addresses", ifaceID, "unknown")
+		externalSwitch, extIfaceID, "--", "lsp-set-addresses", extIfaceID, "unknown")
 	if err != nil {
 		logrus.Errorf("Failed to add logical port to switch, stdout: %q, "+
 			"stderr: %q, error: %v", stdout, stderr, err)
 		return err
 	}
 
+	lrMac := GenerateMac()
+
 	// Connect GR to external_switch with mac address of external interface
 	// and that IP address.
 	stdout, stderr, err = RunOVNNbctl("--", "--may-exist", "lrp-add",
-		gatewayRouter, "rtoe-"+gatewayRouter, macAddress, physicalIPMask,
+		gatewayRouter, "rtoe-"+gatewayRouter, lrMac, lrCIDR.String(),
 		"--", "set", "logical_router_port", "rtoe-"+gatewayRouter,
 		"external-ids:gateway-physical-ip=yes")
 	if err != nil {
@@ -393,7 +464,7 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 		externalSwitch, "etor-"+gatewayRouter, "--", "set",
 		"logical_switch_port", "etor-"+gatewayRouter, "type=router",
 		"options:router-port=rtoe-"+gatewayRouter,
-		"addresses="+"\""+macAddress+"\"")
+		"addresses="+"\""+lrMac+"\"")
 	if err != nil {
 		logrus.Errorf("Failed to add logical port to router, stdout: %q, "+
 			"stderr: %q, error: %v", stdout, stderr, err)
@@ -411,15 +482,6 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 				"stderr: %q, error: %v", stdout, stderr, err)
 			return err
 		}
-	}
-
-	// Default SNAT rules.
-	stdout, stderr, err = RunOVNNbctl("--may-exist", "lr-nat-add",
-		gatewayRouter, "snat", physicalIP, clusterIPSubnet)
-	if err != nil {
-		logrus.Errorf("Failed to create default SNAT rules, stdout: %q, "+
-			"stderr: %q, error: %v", stdout, stderr, err)
-		return err
 	}
 
 	// When there are multiple gateway routers (which would be the likely
@@ -460,5 +522,95 @@ func GatewayInit(clusterIPSubnet, nodeName, nicIP, physicalInterface,
 			}
 		}
 	}
+
+	// Get MAC address of default gateway
+	defaultGWMac, err := getMacForIp(physicalIntf, defaultGW)
+	if err != nil {
+		return err
+	}
+	defaultGWMacRaw := strings.Replace(defaultGWMac, ":", "", -1)
+
+	// Handle ARP for gateway address internally
+	defaultGWRaw, err := getIpAsHex(defaultGW)
+	if err != nil {
+		return err
+	}
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
+		"table=0, priority=100, in_port="+rampExt+", arp, arp_tpa="+defaultGW+", actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:"+defaultGWMac+",load:0x2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x"+defaultGWMacRaw+"->NXM_NX_ARP_SHA[],load:0x"+defaultGWRaw+"->NXM_OF_ARP_SPA[],IN_PORT")
+	if err != nil {
+		return fmt.Errorf("failed to set up rampout bridge ARP flow,"+
+			"stderr: %q, error: %v", stderr, err)
+	}
+
+	// External -> Pod
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
+		"table=0, priority=50, in_port="+offhostIntf+", ip, actions=ct(nat,table=20)")
+	if err != nil {
+		return fmt.Errorf("failed to set up rampout bridge flows,"+
+			"stderr: %q, error: %v", stderr, err)
+	}
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
+		"table=0, priority=50, in_port="+onhostIntf+", ip, actions=ct(nat,zone=555,table=20)")
+	if err != nil {
+		return fmt.Errorf("failed to set up rampout bridge flows,"+
+			"stderr: %q, error: %v", stderr, err)
+	}
+
+	// Pod -> host; NAT packet to onhost gateway IP and send it out
+	onhostMacRaw := strings.Replace(onhostMac, ":", "", -1)
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
+		"table=0, priority=25, in_port="+rampExt+", ip, nw_dst="+physicalIP.String()+", actions=load:0x"+onhostMacRaw+"->NXM_OF_ETH_DST[],ct(commit,zone=555,nat(src="+onhostGatewayIP2+"),exec(set_field:0x6->ct_mark)),output:"+onhostIntf)
+	if err != nil {
+		return fmt.Errorf("failed to set up rampout bridge flows,"+
+			"stderr: %q, error: %v", stderr, err)
+	}
+
+	// Pod -> external; rewrite MAC to NIC's and NAT packet out
+	physicalMacRaw := strings.Replace(physicalMacAddress, ":", "", -1)
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
+		"table=0, priority=10, in_port="+rampExt+", ip, actions=load:0x"+physicalMacRaw+"->NXM_OF_ETH_SRC[],ct(commit,nat(src="+physicalIP.String()+"),exec(set_field:0x5->ct_mark)),output:"+offhostIntf)
+	if err != nil {
+		return fmt.Errorf("failed to set up rampout bridge flows,"+
+			"stderr: %q, error: %v", stderr, err)
+	}
+
+	// established and related connections go to OVN
+	lrMacRaw := strings.Replace(lrMac, ":", "", -1)
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
+		"table=20, priority=100, ct_state=+trk+est, actions=load:0x"+lrMacRaw+"->NXM_OF_ETH_DST[],output:"+rampExt)
+	if err != nil {
+		return fmt.Errorf("failed to set up rampout bridge flows,"+
+			"stderr: %q, error: %v", stderr, err)
+	}
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
+		"table=20, priority=100, ct_state=+trk+rel, actions=load:0x"+lrMacRaw+"->NXM_OF_ETH_DST[],output:"+rampExt)
+	if err != nil {
+		return fmt.Errorf("failed to set up rampout bridge flows,"+
+			"stderr: %q, error: %v", stderr, err)
+	}
+
+	_, stderr, err = RawExec("tc", "qdisc", "add", "dev", physicalIntf, "ingress")
+	if err != nil {
+		return fmt.Errorf("failed to set tc qdisc on %s, stderr:%s %v", physicalIntf, stderr, err)
+	}
+	_, stderr, err = RawExec("tc", "filter", "add", "dev", physicalIntf, "handle", "776", "ingress", "protocol", "ip", "prio", "1", "flower", "indev", physicalIntf, "action", "connmark", "continue")
+	if err != nil {
+		return fmt.Errorf("failed to set tc qdisc on %s, stderr:%s %v", physicalIntf, stderr, err)
+	}
+	_, stderr, err = RawExec("tc", "filter", "add", "dev", physicalIntf, "handle", "5", "ingress", "protocol", "ip", "prio", "2", "fw", "indev", physicalIntf, "action", "mirred", "egress", "redirect", "dev", offhostIntf)
+	if err != nil {
+		return fmt.Errorf("failed to set tc qdisc on %s, stderr:%s %v", physicalIntf, stderr, err)
+	}
+
+	// OVN -> offhost
+	_, stderr, err = RawExec("tc", "qdisc", "add", "dev", offhostIntf, "ingress")
+	if err != nil {
+		return fmt.Errorf("failed to set tc qdisc on %s, stderr:%s (%v)", offhostIntf, stderr, err)
+	}
+	_, stderr, err = RawExec("tc", "filter", "add", "dev", offhostIntf, "handle", "778", "ingress", "protocol", "ip", "prio", "1", "flower", "indev", offhostIntf, "action", "mirred", "egress", "redirect", "dev", physicalIntf)
+	if err != nil {
+		return fmt.Errorf("failed to set tc qdisc on %s, stderr:%s (%v)", offhostIntf, stderr, err)
+	}
+
 	return nil
 }

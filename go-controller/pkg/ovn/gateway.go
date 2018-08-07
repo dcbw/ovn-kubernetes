@@ -16,10 +16,10 @@ func (ovn *Controller) getOvnGateways() ([]string, string, error) {
 	return strings.Fields(out), stderr, err
 }
 
-func (ovn *Controller) getGatewayPhysicalIP(
+func (ovn *Controller) getGatewayExternalIP(
 	physicalGateway string) (string, error) {
 	physicalIP, _, err := util.RunOVNNbctlHA("get", "logical_router",
-		physicalGateway, "external_ids:physical_ip")
+		physicalGateway, "external_ids:external_ip")
 	if err != nil {
 		return "", err
 	}
@@ -52,7 +52,7 @@ func (ovn *Controller) createGatewaysVIP(protocol string, port, targetPort int32
 	}
 
 	for _, physicalGateway := range physicalGateways {
-		physicalIP, err := ovn.getGatewayPhysicalIP(physicalGateway)
+		physicalIP, err := ovn.getGatewayExternalIP(physicalGateway)
 		if err != nil {
 			logrus.Errorf("physical gateway %s does not have physical ip (%v)",
 				physicalGateway, err)

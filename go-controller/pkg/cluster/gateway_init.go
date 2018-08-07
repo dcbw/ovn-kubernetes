@@ -5,7 +5,6 @@ package cluster
 import (
 	"fmt"
 	"net"
-	"os/exec"
 	"regexp"
 	"strings"
 	"syscall"
@@ -19,12 +18,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-const (
-	localnetGatewayIP            = "169.254.33.2/24"
-	localnetGatewayNextHop       = "169.254.33.1"
-	localnetGatewayNextHopSubnet = "169.254.33.1/24"
-)
-
 type iptRule struct {
 	table string
 	chain string
@@ -32,27 +25,26 @@ type iptRule struct {
 }
 
 // getIPv4Address returns the ipv4 address for the network interface 'iface'.
-func getIPv4Address(iface string) (string, error) {
-	var ipAddress string
+func getIPv4AddressAndMac(iface string) (string, string, error) {
 	intf, err := net.InterfaceByName(iface)
 	if err != nil {
-		return ipAddress, err
+		return "", "", err
 	}
 
 	addrs, err := intf.Addrs()
 	if err != nil {
-		return ipAddress, err
+		return "", "", err
 	}
 
 	for _, addr := range addrs {
 		switch ip := addr.(type) {
 		case *net.IPNet:
 			if ip.IP.To4() != nil {
-				ipAddress = ip.String()
+				return ip.String(), intf.HardwareAddr.String(), nil
 			}
 		}
 	}
-	return ipAddress, nil
+	return "", "", fmt.Errorf("no usable IP addresses on %s", iface)
 }
 
 func ensureChain(ipt *iptables.IPTables, table, chain string) error {
@@ -377,77 +369,6 @@ func (cluster *OvnClusterController) nodePortWatcher() error {
 
 func (cluster *OvnClusterController) initGateway(
 	nodeName, clusterIPSubnet, subnet string) error {
-	if cluster.LocalnetGateway {
-		// Create a localnet OVS bridge.
-		localnetBridgeName := "br-localnet"
-		_, stderr, err := util.RunOVSVsctl("--may-exist", "add-br",
-			localnetBridgeName)
-		if err != nil {
-			return fmt.Errorf("Failed to create localnet bridge %s"+
-				", stderr:%s (%v)", localnetBridgeName, stderr, err)
-		}
-
-		_, err = exec.Command("ip", "link", "set", localnetBridgeName,
-			"up").CombinedOutput()
-		if err != nil {
-			logrus.Errorf("failed to up %s (%v)", localnetBridgeName, err)
-			return err
-		}
-
-		// Create a localnet bridge nexthop
-		localnetBridgeNextHop := "br-nexthop"
-		_, stderr, err = util.RunOVSVsctl("--may-exist", "add-port",
-			localnetBridgeName, localnetBridgeNextHop, "--", "set",
-			"interface", localnetBridgeNextHop, "type=internal")
-		if err != nil {
-			return fmt.Errorf("Failed to create localnet bridge next hop %s"+
-				", stderr:%s (%v)", localnetBridgeNextHop, stderr, err)
-		}
-		_, err = exec.Command("ip", "link", "set", localnetBridgeNextHop,
-			"up").CombinedOutput()
-		if err != nil {
-			logrus.Errorf("failed to up %s (%v)", localnetBridgeNextHop, err)
-			return err
-		}
-
-		// Flush IPv4 address of localnetBridgeNextHop.
-		_, err = exec.Command("ip", "addr", "flush",
-			"dev", localnetBridgeNextHop).CombinedOutput()
-		if err != nil {
-			logrus.Errorf("failed to flush ip address of %s (%v)",
-				localnetBridgeNextHop, err)
-			return err
-		}
-
-		// Set localnetBridgeNextHop with an IP address.
-		_, err = exec.Command("ip", "addr", "add",
-			localnetGatewayNextHopSubnet,
-			"dev", localnetBridgeNextHop).CombinedOutput()
-		if err != nil {
-			logrus.Errorf("failed to assign ip address to %s (%v)",
-				localnetBridgeNextHop, err)
-			return err
-		}
-
-		err = util.GatewayInit(clusterIPSubnet, nodeName,
-			localnetGatewayIP, "",
-			localnetBridgeName, localnetGatewayNextHop, subnet,
-			false)
-		if err != nil {
-			logrus.Errorf("failed to GatewayInit for localnet (%v)", err)
-			return err
-		}
-
-		err = localnetGatewayNAT(localnetBridgeNextHop, localnetGatewayIP)
-		if err != nil {
-			logrus.Errorf("Failed to add NAT rules for localnet gateway (%v)",
-				err)
-			return err
-		}
-
-		return nil
-	}
-
 	if cluster.GatewayNextHop == "" || cluster.GatewayIntf == "" {
 		// We need to get the interface details from the default gateway.
 		gatewayIntf, gatewayNextHop, err := getDefaultGatewayInterfaceDetails()
@@ -464,94 +385,38 @@ func (cluster *OvnClusterController) initGateway(
 		}
 	}
 
-	var ipAddress string
+	var ipAddress, macAddress string
 	var err error
-	if !cluster.GatewaySpareIntf {
-		// Check to see whether the interface is OVS bridge.
-		_, _, err = util.RunOVSVsctl("--", "br-exists", cluster.GatewayIntf)
-		if err != nil {
-			// This is not a OVS bridge. We need to create a OVS bridge
-			// and add cluster.GatewayIntf as a port of that bridge.
-			bridgeName, err := util.NicToBridge(cluster.GatewayIntf)
-			if err != nil {
-				return fmt.Errorf("failed to convert %s to OVS bridge: %v",
-					cluster.GatewayIntf, err)
-			}
-			cluster.GatewayBridge = bridgeName
-		} else {
-			// The given (or autodetected) interface is an OVS bridge;
-			// detect if we previously ran NIC/bridge setup
-			if !strings.HasPrefix(cluster.GatewayIntf, "br") {
-				return fmt.Errorf("gateway interface %s is an OVS bridge not "+
-					"a physical device", cluster.GatewayIntf)
-			}
-
-			// Is intfName a port of cluster.GatewayIntf?
-			intfName := util.GetNicName(cluster.GatewayIntf)
-			_, stderr, err := util.RunOVSVsctl("--if-exists", "get",
-				"interface", intfName, "ofport")
-			if err != nil {
-				return fmt.Errorf("failed to get ofport of %s, stderr: %q, error: %v",
-					intfName, stderr, err)
-			}
-			cluster.GatewayBridge = cluster.GatewayIntf
-			cluster.GatewayIntf = intfName
-		}
-
-		// Now, we get IP address from OVS bridge. If IP does not exist,
-		// error out.
-		ipAddress, err = getIPv4Address(cluster.GatewayBridge)
-		if err != nil {
-			return fmt.Errorf("Failed to get interface details for %s (%v)",
-				cluster.GatewayBridge, err)
-		}
-		if ipAddress == "" {
-			return fmt.Errorf("%s does not have a ipv4 address",
-				cluster.GatewayBridge)
-		}
-		err = util.GatewayInit(clusterIPSubnet, nodeName, ipAddress, "",
-			cluster.GatewayBridge, cluster.GatewayNextHop, subnet,
-			cluster.NodePortEnable)
-		if err != nil {
-			logrus.Errorf("failed to GatewayInit (%v)", err)
-			return err
-		}
-
-	} else {
-		// Now, we get IP address from physical interface. If IP does not
-		// exists error out.
-		ipAddress, err = getIPv4Address(cluster.GatewayIntf)
-		if err != nil {
-			return fmt.Errorf("Failed to get interface details for %s (%v)",
-				cluster.GatewayIntf, err)
-		}
-		if ipAddress == "" {
-			return fmt.Errorf("%s does not have a ipv4 address",
-				cluster.GatewayIntf)
-		}
-		err = util.GatewayInit(clusterIPSubnet, nodeName, ipAddress,
-			cluster.GatewayIntf, "", cluster.GatewayNextHop, subnet,
-			cluster.NodePortEnable)
-		if err != nil {
-			logrus.Errorf("failed to GatewayInit (%v)", err)
-			return err
-		}
+	// Check to see whether the interface is OVS bridge.
+	_, _, err = util.RunOVSVsctl("--", "br-exists", cluster.GatewayIntf)
+	if err == nil {
+		return fmt.Errorf("cannot use OVS bridge %q as gateway NIC", cluster.GatewayIntf)
 	}
 
-	if !cluster.GatewaySpareIntf {
-		// Program cluster.GatewayIntf to let non-pod traffic to go to host
-		// stack
-		err = cluster.addDefaultConntrackRules()
+	// Now, we get IP and MAC address from gateway interface. If IP does not exist,
+	// error out.
+	ipAddress, macAddress, err = getIPv4AddressAndMac(cluster.GatewayIntf)
+	if err != nil {
+		return fmt.Errorf("Failed to get interface details for %s (%v)",
+			cluster.GatewayIntf, err)
+	}
+	if ipAddress == "" || macAddress == "" {
+		return fmt.Errorf("%s does not have a ipv4 address or MAC address",
+			cluster.GatewayBridge)
+	}
+
+	err = util.GatewayInit(clusterIPSubnet, nodeName, cluster.GatewayIntf, ipAddress, macAddress,
+		cluster.GatewayNextHop, subnet, cluster.NodePortEnable)
+	if err != nil {
+		logrus.Errorf("failed to GatewayInit (%v)", err)
+		return err
+	}
+
+	if cluster.NodePortEnable {
+		// Program cluster.GatewayIntf to let nodePort traffic to go to pods.
+		err = cluster.nodePortWatcher()
 		if err != nil {
 			return err
-		}
-
-		if cluster.NodePortEnable {
-			// Program cluster.GatewayIntf to let nodePort traffic to go to pods.
-			err = cluster.nodePortWatcher()
-			if err != nil {
-				return err
-			}
 		}
 	}
 
