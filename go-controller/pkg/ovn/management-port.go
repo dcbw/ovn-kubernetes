@@ -305,6 +305,7 @@ func CreateManagementPort(nodeName, localSubnet, clusterSubnet,
 		return err
 	}
 
+if false {
 	// Add the load_balancer to the switch.
 	k8sClusterLbTCP, stderr, err := util.RunOVNNbctl("--data=bare", "--no-heading", "--columns=_uuid", "find", "load_balancer", "external_ids:k8s-cluster-lb-tcp=yes")
 	if err != nil {
@@ -335,6 +336,7 @@ func CreateManagementPort(nodeName, localSubnet, clusterSubnet,
 		logrus.Errorf("Failed to add logical switch %v's loadbalancer, stdout: %q, stderr: %q, error: %v", nodeName, stdout, stderr, err)
 		return err
 	}
+}
 
 	return nil
 }

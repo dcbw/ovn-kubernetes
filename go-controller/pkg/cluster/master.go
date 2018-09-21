@@ -264,6 +264,7 @@ func (cluster *OvnClusterController) SetupMaster(masterNodeName string) error {
 		return err
 	}
 
+if false {
 	// Create 2 load-balancers for east-west traffic.  One handles UDP and another handles TCP.
 	k8sClusterLbTCP, stderr, err := util.RunOVNNbctl("--data=bare", "--no-heading", "--columns=_uuid", "find", "load_balancer", "external_ids:k8s-cluster-lb-tcp=yes")
 	if err != nil {
@@ -291,6 +292,7 @@ func (cluster *OvnClusterController) SetupMaster(masterNodeName string) error {
 			return err
 		}
 	}
+}
 
 	// Create a logical switch called "join" that will be used to connect gateway routers to the distributed router.
 	// The "join" will be allocated IP addresses in the range 100.64.1.0/24.
