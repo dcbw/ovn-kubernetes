@@ -348,6 +348,11 @@ func GatewayInit(clusterIPSubnet, nodeName, physicalIntf, physicalCIDR, physical
 	if err != nil {
 		return fmt.Errorf("failed to up %s, stderr:%s (%v)", extBridgeName, stderr, err)
 	}
+	_, stderr, err = RunOVSOfctl("-O", "openflow13", "del-flows", extBridgeName)
+	if err != nil {
+		return fmt.Errorf("Failed to clear rampout bridge %s, "+
+			"stderr:%s (%v)", extBridgeName, stderr, err)
+	}
 
 	offhostIntf := "offhost"
 	_, stderr, err = RunOVSVsctl("--may-exist", "add-port",
@@ -554,32 +559,22 @@ if false {
 	// Pod -> host; NAT packet to onhost gateway IP and send it out
 	onhostMacRaw := strings.Replace(onhostMac, ":", "", -1)
 	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
-		"table=0, priority=25, in_port="+rampExt+", ip, nw_dst="+physicalIP.String()+", actions=load:0x"+onhostMacRaw+"->NXM_OF_ETH_DST[],goto_table:10")
-	if err != nil {
-		return fmt.Errorf("failed to set up rampout bridge flows,"+
-			"stderr: %q, error: %v", stderr, err)
-	}
-	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
-		"table=10, in_port="+rampExt+", ip, actions=ct(commit,nat(src="+onhostGatewayIP2+"),exec(load:0x6->NXM_NX_CT_MARK[])),output:"+onhostIntf)
+		"table=0, priority=25, in_port="+rampExt+", ip, nw_dst="+physicalIP.String()+", actions=load:0x"+onhostMacRaw+"->NXM_OF_ETH_DST[],ct(commit,nat(src="+onhostGatewayIP2+"),exec(set_field:0x6->ct_mark)),output:"+onhostIntf)
 	if err != nil {
 		return fmt.Errorf("failed to set up rampout bridge flows,"+
 			"stderr: %q, error: %v", stderr, err)
 	}
 
+if false {
 	// Pod -> external; rewrite MAC to NIC's and NAT packet out
 	physicalMacRaw := strings.Replace(physicalMacAddress, ":", "", -1)
 	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
-		"table=0, priority=10, in_port="+rampExt+", ip, actions=load:0x"+physicalMacRaw+"->NXM_OF_ETH_SRC[],goto_table:20")
+		"table=0, priority=10, in_port="+rampExt+", ip, actions=load:0x"+physicalMacRaw+"->NXM_OF_ETH_SRC[],ct(commit,nat(src="+physicalIP.String()+"),exec(set_field:0x5->ct_mark)),output:"+offhostIntf)
 	if err != nil {
 		return fmt.Errorf("failed to set up rampout bridge flows,"+
 			"stderr: %q, error: %v", stderr, err)
 	}
-	_, stderr, err = RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
-		"table=20, in_port="+rampExt+", ip, actions=ct(commit,nat(src="+physicalIP.String()+"),exec(load:0x5->NXM_NX_CT_MARK[])),output:"+offhostIntf)
-	if err != nil {
-		return fmt.Errorf("failed to set up rampout bridge flows,"+
-			"stderr: %q, error: %v", stderr, err)
-	}
+}
 
 	// established and related connections go to OVN
 	lrMacRaw := strings.Replace(lrMac, ":", "", -1)
