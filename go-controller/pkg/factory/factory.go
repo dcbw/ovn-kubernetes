@@ -18,14 +18,22 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-type informer struct {
-	sync.Mutex
-	oType    reflect.Type
-	inf      cache.SharedIndexInformer
-	handlers map[uint64]cache.ResourceEventHandler
+type Handler struct {
+	cache.FilteringResourceEventHandler
+
+	id        uint64
+	tombstone uint32
 }
 
-func (i *informer) forEachHandler(obj interface{}, f func(id uint64, handler cache.ResourceEventHandler)) {
+type informer struct {
+	sync.Mutex
+	oType      reflect.Type
+	inf        cache.SharedIndexInformer
+	handlers   map[uint64]*Handler
+	removeChan chan uint64
+}
+
+func (i *informer) forEachHandler(obj interface{}, f func(h *Handler)) {
 	i.Lock()
 	defer i.Unlock()
 
@@ -35,8 +43,11 @@ func (i *informer) forEachHandler(obj interface{}, f func(id uint64, handler cac
 		return
 	}
 
-	for id, handler := range i.handlers {
-		f(id, handler)
+	for _, handler := range i.handlers {
+		// Only run alive handlers
+		if !atomic.CompareAndSwapUint32(&handler.tombstone, 1, 1) {
+			f(handler)
+		}
 	}
 }
 
@@ -51,12 +62,36 @@ const (
 	resyncInterval = 12 * time.Hour
 )
 
-func newInformer(oType reflect.Type, inf cache.SharedIndexInformer) *informer {
-	return &informer{
-		oType:    oType,
-		inf:      inf,
-		handlers: make(map[uint64]cache.ResourceEventHandler),
+func newInformer(oType reflect.Type, sharedInformer cache.SharedIndexInformer) *informer {
+	inf := &informer{
+		oType:      oType,
+		inf:        sharedInformer,
+		handlers:   make(map[uint64]*Handler),
+		removeChan: make(chan uint64),
 	}
+
+	go func() {
+		for {
+			idToRemove, ok := <- inf.removeChan
+			if !ok {
+				// Channel closed
+				break
+			}
+
+			inf.Lock()
+			defer inf.Unlock()
+			if _, ok := inf.handlers[idToRemove]; !ok {
+				logrus.Warningf("tried to remove unknown object type %v event handler %d", oType, idToRemove)
+				continue
+			}
+
+			// Remove the handler
+			delete(inf.handlers, idToRemove)
+			logrus.Debugf("removed %v event handler %d", oType, idToRemove)
+		}
+	}()
+
+	return inf
 }
 
 var (
@@ -104,15 +139,15 @@ func NewWatchFactory(c kubernetes.Interface, stopChan <-chan struct{}) (*WatchFa
 func (wf *WatchFactory) newFederatedHandler(inf *informer) cache.ResourceEventHandlerFuncs {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			inf.forEachHandler(obj, func(id uint64, handler cache.ResourceEventHandler) {
-				logrus.Debugf("running %v ADD event for handler %d", inf.oType, id)
-				handler.OnAdd(obj)
+			inf.forEachHandler(obj, func(h *Handler) {
+				logrus.Debugf("running %v ADD event for handler %d", inf.oType, h.id)
+				h.OnAdd(obj)
 			})
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			inf.forEachHandler(newObj, func(id uint64, handler cache.ResourceEventHandler) {
-				logrus.Debugf("running %v UPDATE event for handler %d", inf.oType, id)
-				handler.OnUpdate(oldObj, newObj)
+			inf.forEachHandler(newObj, func(h *Handler) {
+				logrus.Debugf("running %v UPDATE event for handler %d", inf.oType, h.id)
+				h.OnUpdate(oldObj, newObj)
 			})
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -129,9 +164,9 @@ func (wf *WatchFactory) newFederatedHandler(inf *informer) cache.ResourceEventHa
 					return
 				}
 			}
-			inf.forEachHandler(obj, func(id uint64, handler cache.ResourceEventHandler) {
-				logrus.Debugf("running %v DELETE event for handler %d", inf.oType, id)
-				handler.OnDelete(obj)
+			inf.forEachHandler(obj, func(h *Handler) {
+				logrus.Debugf("running %v DELETE event for handler %d", inf.oType, h.id)
+				h.OnDelete(obj)
 			})
 		},
 	}
@@ -167,15 +202,15 @@ func getObjectMeta(objType reflect.Type, obj interface{}) (*metav1.ObjectMeta, e
 	return nil, fmt.Errorf("cannot get ObjectMeta from type %v", objType)
 }
 
-func (wf *WatchFactory) addHandler(objType reflect.Type, namespace string, lsel *metav1.LabelSelector, funcs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) addHandler(objType reflect.Type, namespace string, lsel *metav1.LabelSelector, funcs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	inf, ok := wf.informers[objType]
 	if !ok {
-		return 0, fmt.Errorf("unknown object type %v", objType)
+		return nil, fmt.Errorf("unknown object type %v", objType)
 	}
 
 	sel, err := metav1.LabelSelectorAsSelector(lsel)
 	if err != nil {
-		return 0, fmt.Errorf("error creating label selector: %v", err)
+		return nil, fmt.Errorf("error creating label selector: %v", err)
 	}
 
 	filterFunc := func(obj interface{}) bool {
@@ -215,10 +250,15 @@ func (wf *WatchFactory) addHandler(objType reflect.Type, namespace string, lsel 
 	inf.Lock()
 	defer inf.Unlock()
 
-	inf.handlers[handlerID] = cache.FilteringResourceEventHandler{
-		FilterFunc: filterFunc,
-		Handler:    funcs,
+	handler := &Handler{
+		cache.FilteringResourceEventHandler{
+			FilterFunc: filterFunc,
+			Handler:    funcs,
+		},
+		handlerID,
+		0,
 	}
+	inf.handlers[handlerID] = handler
 	logrus.Debugf("added %v event handler %d", objType, handlerID)
 
 	// Send existing items to the handler's add function; informers usually
@@ -228,91 +268,91 @@ func (wf *WatchFactory) addHandler(objType reflect.Type, namespace string, lsel 
 		inf.handlers[handlerID].OnAdd(obj)
 	}
 
-	return handlerID, nil
+	return handler, nil
 }
 
-func (wf *WatchFactory) removeHandler(objType reflect.Type, handlerID uint64) error {
+func (wf *WatchFactory) removeHandler(objType reflect.Type, handler *Handler) error {
 	inf, ok := wf.informers[objType]
 	if !ok {
 		return fmt.Errorf("tried to remove unknown object type %v event handler", objType)
 	}
 
-	inf.Lock()
-	defer inf.Unlock()
-	if _, ok := inf.handlers[handlerID]; !ok {
-		return fmt.Errorf("tried to remove unknown object type %v event handler %d", objType, handlerID)
+	if !atomic.CompareAndSwapUint32(&handler.tombstone, 0, 1) {
+		// Already removed
+		return fmt.Errorf("tried to remove already removed object type %v event handler %d", objType, handler.id)
 	}
-	delete(inf.handlers, handlerID)
-	logrus.Debugf("removed %v event handler %d", objType, handlerID)
+
+	logrus.Debugf("sending %v event handler %d for removal", objType, handler.id)
+	inf.removeChan <- handler.id
 	return nil
 }
 
 // AddPodHandler adds a handler function that will be executed on Pod object changes
-func (wf *WatchFactory) AddPodHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddPodHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(podType, "", nil, handlerFuncs, processExisting)
 }
 
 // AddFilteredPodHandler adds a handler function that will be executed when Pod objects that match the given filters change
-func (wf *WatchFactory) AddFilteredPodHandler(namespace string, lsel *metav1.LabelSelector, handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddFilteredPodHandler(namespace string, lsel *metav1.LabelSelector, handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(podType, namespace, lsel, handlerFuncs, processExisting)
 }
 
 // RemovePodHandler removes a Pod object event handler function
-func (wf *WatchFactory) RemovePodHandler(handlerID uint64) error {
-	return wf.removeHandler(podType, handlerID)
+func (wf *WatchFactory) RemovePodHandler(handler *Handler) error {
+	return wf.removeHandler(podType, handler)
 }
 
 // AddServiceHandler adds a handler function that will be executed on Service object changes
-func (wf *WatchFactory) AddServiceHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddServiceHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(serviceType, "", nil, handlerFuncs, processExisting)
 }
 
 // RemoveServiceHandler removes a Service object event handler function
-func (wf *WatchFactory) RemoveServiceHandler(handlerID uint64) error {
-	return wf.removeHandler(serviceType, handlerID)
+func (wf *WatchFactory) RemoveServiceHandler(handler *Handler) error {
+	return wf.removeHandler(serviceType, handler)
 }
 
 // AddEndpointsHandler adds a handler function that will be executed on Endpoints object changes
-func (wf *WatchFactory) AddEndpointsHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddEndpointsHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(endpointsType, "", nil, handlerFuncs, processExisting)
 }
 
 // RemoveEndpointsHandler removes a Endpoints object event handler function
-func (wf *WatchFactory) RemoveEndpointsHandler(handlerID uint64) error {
-	return wf.removeHandler(endpointsType, handlerID)
+func (wf *WatchFactory) RemoveEndpointsHandler(handler *Handler) error {
+	return wf.removeHandler(endpointsType, handler)
 }
 
 // AddPolicyHandler adds a handler function that will be executed on NetworkPolicy object changes
-func (wf *WatchFactory) AddPolicyHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddPolicyHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(policyType, "", nil, handlerFuncs, processExisting)
 }
 
 // RemovePolicyHandler removes a NetworkPolicy object event handler function
-func (wf *WatchFactory) RemovePolicyHandler(handlerID uint64) error {
-	return wf.removeHandler(policyType, handlerID)
+func (wf *WatchFactory) RemovePolicyHandler(handler *Handler) error {
+	return wf.removeHandler(policyType, handler)
 }
 
 // AddNamespaceHandler adds a handler function that will be executed on Namespace object changes
-func (wf *WatchFactory) AddNamespaceHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddNamespaceHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(namespaceType, "", nil, handlerFuncs, processExisting)
 }
 
 // AddFilteredNamespaceHandler adds a handler function that will be executed when Namespace objects that match the given filters change
-func (wf *WatchFactory) AddFilteredNamespaceHandler(namespace string, lsel *metav1.LabelSelector, handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddFilteredNamespaceHandler(namespace string, lsel *metav1.LabelSelector, handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(namespaceType, namespace, lsel, handlerFuncs, processExisting)
 }
 
 // RemoveNamespaceHandler removes a Namespace object event handler function
-func (wf *WatchFactory) RemoveNamespaceHandler(handlerID uint64) error {
-	return wf.removeHandler(namespaceType, handlerID)
+func (wf *WatchFactory) RemoveNamespaceHandler(handler *Handler) error {
+	return wf.removeHandler(namespaceType, handler)
 }
 
 // AddNodeHandler adds a handler function that will be executed on Node object changes
-func (wf *WatchFactory) AddNodeHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (uint64, error) {
+func (wf *WatchFactory) AddNodeHandler(handlerFuncs cache.ResourceEventHandler, processExisting func([]interface{})) (*Handler, error) {
 	return wf.addHandler(nodeType, "", nil, handlerFuncs, processExisting)
 }
 
 // RemoveNodeHandler removes a Node object event handler function
-func (wf *WatchFactory) RemoveNodeHandler(handlerID uint64) error {
-	return wf.removeHandler(nodeType, handlerID)
+func (wf *WatchFactory) RemoveNodeHandler(handler *Handler) error {
+	return wf.removeHandler(nodeType, handler)
 }
