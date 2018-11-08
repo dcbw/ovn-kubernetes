@@ -309,7 +309,9 @@ func (cluster *OvnClusterController) SetupMaster(masterNodeName string) error {
 
 	// Create a logical switch called "join" that will be used to connect gateway routers to the distributed router.
 	// The "join" will be allocated IP addresses in the range 100.64.1.0/24.
-	stdout, stderr, err = util.RunOVNNbctl("--may-exist", "ls-add", "join")
+	stdout, stderr, err = util.RunOVNNbctl("--may-exist", "ls-add", "join",
+		"--", "set", "logical_switch", "join", "other-config:subnet=100.64.1.0/24",
+		"--", "set", "logical_switch", "join", "other-config:exclude_ips=100.64.1.1")
 	if err != nil {
 		logrus.Errorf("Failed to create logical switch called \"join\", stdout: %q, stderr: %q, error: %v", stdout, stderr, err)
 		return err
