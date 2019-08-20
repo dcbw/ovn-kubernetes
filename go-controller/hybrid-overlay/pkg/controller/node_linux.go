@@ -206,7 +206,7 @@ func (n *NodeController) nodeAddOrUpdate(node *kapi.Node) error {
 
 	n.Delete(node)
 
-	cidr, nodeIP, drMAC := getNodeDetails(node, houtil.IsWindowsNode)
+	cidr, nodeIP, drMAC := getNodeDetails(node, houtil.IsWindowsNode, true)
 	if cidr == nil || nodeIP == nil || drMAC == nil {
 		return nil
 	}
