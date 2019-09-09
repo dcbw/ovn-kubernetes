@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/kube"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 	"github.com/sirupsen/logrus"
@@ -43,43 +45,40 @@ const (
 // OvnHAMasterController is the object holder for managing the HA master
 // cluster
 type OvnHAMasterController struct {
-	kubeClient      kubernetes.Interface
-	cluster         *OvnClusterController
-	ovnController   *ovn.Controller
-	nodeName        string
-	manageDBServers bool
-	isLeader        bool
-	leaderElector   *leaderelection.LeaderElector
+	kubeClient        kube.Interface
+	clusterController *OvnClusterController
+	ovnController     *ovn.Controller
+	watchFactory      *factory.WatchFactory
+	nodeName          string
+	isLeader          bool
+	leaderElector     *leaderelection.LeaderElector
 }
 
 // NewHAMasterController creates a new HA Master controller
-func NewHAMasterController(kubeClient kubernetes.Interface, cluster *OvnClusterController,
-	nodeName string, manageDBServers bool) *OvnHAMasterController {
-	ovnController := ovn.NewOvnController(kubeClient, cluster.watchFactory)
+func NewHAMasterController(kubeClient kubernetes.Interface, wf *factory.WatchFactory,
+	ovnController *ovn.Controller, nodeName string) *OvnHAMasterController {
 	return &OvnHAMasterController{
-		kubeClient:      kubeClient,
-		cluster:         cluster,
-		ovnController:   ovnController,
-		nodeName:        nodeName,
-		manageDBServers: manageDBServers,
-		isLeader:        false,
-		leaderElector:   nil,
+		kubeClient:        &kube.Kube{KClient: kubeClient},
+		clusterController: NewClusterController(kubeClient, wf, nodeName),
+		ovnController:     ovnController,
+		watchFactory:      wf,
+		nodeName:          nodeName,
+		isLeader:          false,
+		leaderElector:     nil,
 	}
 }
 
-// StartHAMasterCluster runs the replication controller
-func (hacluster *OvnHAMasterController) StartHAMasterCluster() error {
-	if hacluster.manageDBServers {
-		// Always demote the OVN DBs to backmode mode.
-		// After the leader election, the leader will promote the OVN Dbs
-		// to become active.
-		err := hacluster.DemoteOVNDbs(invalidIPAddress, "6641", "6642")
-		if err != nil {
-			// If we are not able to communicate to the OVN ovsdb-servers,
-			// then it is better to return than continue.
-			// cmd/ovnkube.go will panic if this function returns error.
-			return err
-		}
+// StartMaster runs the HA master
+func (hacluster *OvnHAMasterController) StartMaster() error {
+	// Always demote the OVN DBs to backmode mode.
+	// After the leader election, the leader will promote the OVN Dbs
+	// to become active.
+	err := hacluster.DemoteOVNDbs(invalidIPAddress, "6641", "6642")
+	if err != nil {
+		// If we are not able to communicate to the OVN ovsdb-servers,
+		// then it is better to return than continue.
+		// cmd/ovnkube.go will panic if this function returns error.
+		return err
 	}
 
 	// Set up leader election process first
@@ -107,10 +106,8 @@ func (hacluster *OvnHAMasterController) StartHAMasterCluster() error {
 			err = hacluster.ConfigureAsActive(nodeName)
 			if err != nil {
 				logrus.Errorf(err.Error())
-				if hacluster.manageDBServers {
-					// Stop ovn-northd before panicing.
-					_, _, _ = util.RunOVNNorthAppCtl("exit")
-				}
+				// Stop ovn-northd before panicing.
+				_, _, _ = util.RunOVNNorthAppCtl("exit")
 				panic(err.Error())
 			}
 			hacluster.isLeader = true
@@ -122,22 +119,18 @@ func (hacluster *OvnHAMasterController) StartHAMasterCluster() error {
 				// we need to handle the transition properly like clearing
 				// the cache. It is better to exit for now.
 				// kube will restart and this will become a follower.
-				if hacluster.manageDBServers {
-					// Stop ovn-northd and then exit.
-					_, _, _ = util.RunOVNNorthAppCtl("exit")
-				}
+				// Stop ovn-northd and then exit.
+				_, _, _ = util.RunOVNNorthAppCtl("exit")
 				logrus.Infof("I (" + hacluster.nodeName + ") am no longer a leader. Exiting")
 				os.Exit(1)
 			}
-			ep, er := hacluster.cluster.Kube.GetEndpoint(config.Kubernetes.OVNConfigNamespace, ovnkubeDbEp)
+			ep, er := hacluster.kubeClient.GetEndpoint(config.Kubernetes.OVNConfigNamespace, ovnkubeDbEp)
 			if er == nil {
 				er = hacluster.ConfigureAsStandby(ep)
 				if er != nil {
 					logrus.Errorf(er.Error())
-					if hacluster.manageDBServers {
-						// Stop ovn-northd and then exit
-						_, _, _ = util.RunOVNNorthAppCtl("exit")
-					}
+					// Stop ovn-northd and then exit
+					_, _, _ = util.RunOVNNorthAppCtl("exit")
 					panic(er.Error())
 				}
 			}
@@ -158,10 +151,8 @@ func (hacluster *OvnHAMasterController) StartHAMasterCluster() error {
 				// the cache. It is better to exit for now.
 				// kube will restart and this will become a follower.
 				logrus.Infof("I (" + hacluster.nodeName + ") am no longer a leader. Exiting")
-				if hacluster.manageDBServers {
-					// Stop ovn-northd and then exit.
-					_, _, _ = util.RunOVNNorthAppCtl("exit")
-				}
+				// Stop ovn-northd and then exit.
+				_, _, _ = util.RunOVNNorthAppCtl("exit")
 				os.Exit(1)
 			},
 			OnNewLeader: HAClusterNewLeader,
@@ -181,54 +172,57 @@ func (hacluster *OvnHAMasterController) StartHAMasterCluster() error {
 	return err
 }
 
+// StartNode passes through to the base OvnClusterController node
+func (hacluster *OvnHAMasterController) StartNode() error {
+	return hacluster.clusterController.StartNode()
+}
+
 // ConfigureAsActive configures the node as active.
 func (hacluster *OvnHAMasterController) ConfigureAsActive(masterNodeName string) error {
-	if hacluster.manageDBServers {
-		// Step 1: Update the ovnkube-db endpoints with invalid Ip.
-		// Step 2: Promote OVN DB servers to become active
-		// Step 3: Make sure that ovn-northd has done one round of
-		//         flow computation.
-		// Step 4: Update the ovnkube-db endpoints with the new master Ip.
+	// Step 1: Update the ovnkube-db endpoints with invalid Ip.
+	// Step 2: Promote OVN DB servers to become active
+	// Step 3: Make sure that ovn-northd has done one round of
+	//         flow computation.
+	// Step 4: Update the ovnkube-db endpoints with the new master Ip.
 
-		// Find the endpoint for the service
-		ep, err := hacluster.cluster.Kube.GetEndpoint(config.Kubernetes.OVNConfigNamespace, ovnkubeDbEp)
-		if err != nil {
-			ep = nil
-		}
-		err = hacluster.updateOvnDbEndpoints(ep, true)
-		if err != nil {
-			logrus.Errorf("%s Endpount create/update failed", ovnkubeDbEp)
-			return err
-		}
+	// Find the endpoint for the service
+	ep, err := hacluster.kubeClient.GetEndpoint(config.Kubernetes.OVNConfigNamespace, ovnkubeDbEp)
+	if err != nil {
+		ep = nil
+	}
+	err = hacluster.updateOvnDbEndpoints(ep, true)
+	if err != nil {
+		logrus.Errorf("%s Endpount create/update failed", ovnkubeDbEp)
+		return err
+	}
 
-		// Promote the OVN DB servers
-		err = hacluster.PromoteOVNDbs(strconv.Itoa(int(ovnNorthDbPort)), strconv.Itoa(int(ovnSouthDbPort)))
-		if err != nil {
-			logrus.Errorf("Promoting OVN ovsdb-servers to active failed")
-			return err
-		}
+	// Promote the OVN DB servers
+	err = hacluster.PromoteOVNDbs(strconv.Itoa(int(ovnNorthDbPort)), strconv.Itoa(int(ovnSouthDbPort)))
+	if err != nil {
+		logrus.Errorf("Promoting OVN ovsdb-servers to active failed")
+		return err
+	}
 
-		// Wait for ovn-northd sync up
-		err = hacluster.syncOvnNorthd()
-		if err != nil {
-			logrus.Errorf("Syncing ovn-northd failed")
-			return err
-		}
+	// Wait for ovn-northd sync up
+	err = hacluster.syncOvnNorthd()
+	if err != nil {
+		logrus.Errorf("Syncing ovn-northd failed")
+		return err
+	}
 
-		ep, err = hacluster.cluster.Kube.GetEndpoint(config.Kubernetes.OVNConfigNamespace, ovnkubeDbEp)
-		if err != nil {
-			// This should not happen.
-			ep = nil
-		}
-		err = hacluster.updateOvnDbEndpoints(ep, false)
-		if err != nil {
-			logrus.Errorf("%s Endpount create/update failed", ovnkubeDbEp)
-			return err
-		}
+	ep, err = hacluster.kubeClient.GetEndpoint(config.Kubernetes.OVNConfigNamespace, ovnkubeDbEp)
+	if err != nil {
+		// This should not happen.
+		ep = nil
+	}
+	err = hacluster.updateOvnDbEndpoints(ep, false)
+	if err != nil {
+		logrus.Errorf("%s Endpount create/update failed", ovnkubeDbEp)
+		return err
 	}
 
 	// run the cluster controller to init the master
-	err := hacluster.cluster.StartClusterMaster(hacluster.nodeName)
+	err = hacluster.StartMaster()
 	if err != nil {
 		return err
 	}
@@ -280,7 +274,7 @@ func (hacluster *OvnHAMasterController) updateOvnDbEndpoints(ep *kapi.Endpoints,
 
 		ovndbEp.ObjectMeta.SetAnnotations(map[string]string{
 			"ovnkube-master-leader": hacluster.nodeName})
-		_, err = hacluster.cluster.Kube.CreateEndpoint(config.Kubernetes.OVNConfigNamespace, &ovndbEp)
+		_, err = hacluster.kubeClient.CreateEndpoint(config.Kubernetes.OVNConfigNamespace, &ovndbEp)
 		if err != nil {
 			logrus.Errorf("%s Endpount Create failed", ovnkubeDbEp)
 		}
@@ -292,7 +286,7 @@ func (hacluster *OvnHAMasterController) updateOvnDbEndpoints(ep *kapi.Endpoints,
 		epAnnotations := ovndbEp.ObjectMeta.GetAnnotations()
 		epAnnotations["ovnkube-master-leader"] = hacluster.nodeName
 		ovndbEp.ObjectMeta.SetAnnotations(epAnnotations)
-		_, err := hacluster.cluster.Kube.UpdateEndpoint(config.Kubernetes.OVNConfigNamespace, ovndbEp)
+		_, err := hacluster.kubeClient.UpdateEndpoint(config.Kubernetes.OVNConfigNamespace, ovndbEp)
 		if err != nil {
 			logrus.Errorf("%s Endpount Update failed", ovnkubeDbEp)
 		}
@@ -302,11 +296,6 @@ func (hacluster *OvnHAMasterController) updateOvnDbEndpoints(ep *kapi.Endpoints,
 
 // ConfigureAsStandby configures the node as standby
 func (hacluster *OvnHAMasterController) ConfigureAsStandby(ep *kapi.Endpoints) error {
-	if !hacluster.manageDBServers {
-		// Nothing to do if not managing db servers.
-		return nil
-	}
-
 	// Get the master ip
 	masterIPList, sbDBPort, nbDBPort, err := extractDbRemotesFromEndpoint(ep)
 	if err != nil {
@@ -391,7 +380,7 @@ func (hacluster *OvnHAMasterController) validateOvnDbEndpoints(ep *kapi.Endpoint
 
 // WatchOvnDbEndpoints watches the ovnkube-db end point
 func (hacluster *OvnHAMasterController) WatchOvnDbEndpoints() error {
-	_, err := hacluster.cluster.watchFactory.AddFilteredEndpointsHandler(config.Kubernetes.OVNConfigNamespace,
+	_, err := hacluster.watchFactory.AddFilteredEndpointsHandler(config.Kubernetes.OVNConfigNamespace,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				ep := obj.(*kapi.Endpoints)

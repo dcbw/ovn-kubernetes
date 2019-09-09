@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 // Interface represents the exported methods for dealing with getting/setting
@@ -29,6 +30,7 @@ type Interface interface {
 	CreateEndpoint(namespace string, ep *kapi.Endpoints) (*kapi.Endpoints, error)
 	UpdateEndpoint(namespace string, ep *kapi.Endpoints) (*kapi.Endpoints, error)
 	GetNamespaces() (*kapi.NamespaceList, error)
+	CoreV1() corev1.CoreV1Interface
 }
 
 // Kube is the structure object upon which the Interface is implemented
@@ -124,4 +126,9 @@ func (k *Kube) UpdateEndpoint(namespace string, ep *kapi.Endpoints) (*kapi.Endpo
 // GetNamespaces returns all Namespace resource from kubernetes apiserver
 func (k *Kube) GetNamespaces() (*kapi.NamespaceList, error) {
 	return k.KClient.CoreV1().Namespaces().List(metav1.ListOptions{})
+}
+
+// CoreV1 returns a CoreV1 interface
+func (k *Kube) CoreV1() corev1.CoreV1Interface {
+	return k.KClient.CoreV1()
 }
