@@ -15,12 +15,15 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 
+	hocontroller "github.com/ovn-org/ovn-kubernetes/go-controller/hybrid-overlay/pkg/controller"
 	ovncluster "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/cluster"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
+	"k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kexec "k8s.io/utils/exec"
 )
 
@@ -98,6 +101,12 @@ func main() {
 	c.Flags = append(c.Flags, config.OvnSBFlags...)
 	c.Flags = append(c.Flags, config.OVNGatewayFlags...)
 	c.Flags = append(c.Flags, config.MasterHAFlags...)
+	c.Flags = append(c.Flags, hocontroller.GetHybridOverlayCLIFlags([]cli.Flag{
+		cli.BoolFlag{
+			Name:  "enable-hybrid-overlay",
+			Usage: "Enables hybrid overlay operation (requires --init-master and/or --init-node)",
+		}})...)
+
 	c.Action = func(c *cli.Context) error {
 		return runOvnKube(c)
 	}
@@ -197,7 +206,7 @@ func runOvnKube(ctx *cli.Context) error {
 			panic("Cannot specify cleanup-node together with 'init-node or 'init-master'.")
 		}
 
-		if err := ovncluster.CleanupClusterNode(cleanupNode); err != nil {
+		if err = ovncluster.CleanupClusterNode(cleanupNode); err != nil {
 			logrus.Errorf(err.Error())
 			panic(err.Error())
 		}
@@ -210,13 +219,29 @@ func runOvnKube(ctx *cli.Context) error {
 	}
 
 	if master != "" || node != "" {
+		enableHybridOverlay := ctx.Bool("enable-hybrid-overlay")
+
 		if master != "" {
 			if runtime.GOOS == "windows" {
 				panic("Windows is not supported as master node")
 			}
 
+			var nodeSelector *metav1.LabelSelector
+			var hybridOverlayClusterSubnets []config.CIDRNetworkEntry
+			if enableHybridOverlay {
+				hybridOverlayClusterSubnets, err = hocontroller.GetHybridOverlayClusterSubnets(ctx)
+				if err != nil {
+					logrus.Errorf(err.Error())
+					panic(err.Error())
+				}
+
+				nodeSelector = &metav1.LabelSelector{
+					MatchLabels: map[string]string{v1.LabelOSStable: "linux"},
+				}
+			}
+
 			// run the HA master controller to init the master
-			ovnHAController := ovn.NewHAMasterController(clientset, factory, master)
+			ovnHAController := ovn.NewHAMasterController(clientset, factory, master, hybridOverlayClusterSubnets, nodeSelector)
 			err := ovnHAController.StartHAMasterController()
 			if err != nil {
 				logrus.Errorf(err.Error())
@@ -236,6 +261,15 @@ func runOvnKube(ctx *cli.Context) error {
 			}
 		}
 
+		if enableHybridOverlay {
+			if err := hocontroller.StartHybridOverlay(ctx, master != "", node, clientset, factory, stopChan); err != nil {
+				logrus.Errorf(err.Error())
+				panic(err.Error())
+			}
+		}
+	}
+
+	if master != "" || node != "" {
 		// run forever
 		select {}
 	}
