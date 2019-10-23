@@ -10,7 +10,6 @@ import (
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ovn-org/ovn-kubernetes/go-controller/hybrid-overlay/pkg/types"
 	houtil "github.com/ovn-org/ovn-kubernetes/go-controller/hybrid-overlay/pkg/util"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/kube"
@@ -451,16 +450,6 @@ func (n *NodeController) ensureHybridOverlayBridge() error {
 		return fmt.Errorf("failed to set up hybrid overlay bridge pod dispatch default drop rule,"+
 			"stderr: %q, error: %v", stderr, err)
 	}
-
-	thisNode, err := n.kube.GetNode(n.nodeName)
-	if err != nil {
-		return err
-	}
-
-	if err := n.kube.SetAnnotationOnNode(thisNode, types.HybridOverlayDrMac, portMAC.String()); err != nil {
-		return fmt.Errorf("Failed to set node %q HybridOverlayDrMac annotation: %v", n.nodeName, err)
-	}
-	n.drMAC = portMAC.String()
 
 	// Allow VXLAN traffic on the host
 	ipt, err := util.GetIPTablesHelper(iptables.ProtocolIPv4)

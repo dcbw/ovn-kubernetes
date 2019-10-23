@@ -93,21 +93,6 @@ func parseNodeHostSubnet(node *kapi.Node, annotation string) (*net.IPNet, error)
 	return subnet, nil
 }
 
-func parseNodeDRMAC(node *kapi.Node) (net.HardwareAddr, error) {
-	drmac, ok := node.Annotations[types.HybridOverlayDrMac]
-	if !ok {
-		return nil, nil
-	}
-
-	hwaddr, err := net.ParseMAC(drmac)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing node %s annotation %s value %q: %v",
-			node.Name, types.HybridOverlayDrMac, drmac, err)
-	}
-
-	return hwaddr, nil
-}
-
 func sameCIDR(a, b *net.IPNet) bool {
 	if a == b {
 		return true
@@ -189,13 +174,6 @@ func (m *MasterController) handleOverlayPort(node *kapi.Node) error {
 		return nil
 	}
 
-	drMAC, err := parseNodeDRMAC(node)
-	if drMAC == nil || err != nil {
-		// No DRMAC; clean up
-		m.deleteOverlayPort(node)
-		return err
-	}
-
 	subnet, err := parseNodeHostSubnet(node, ovn.OvnHostSubnet)
 	if subnet == nil || err != nil {
 		// No subnet allocated yet; clean up
@@ -224,6 +202,11 @@ func (m *MasterController) handleOverlayPort(node *kapi.Node) error {
 			return fmt.Errorf("failed to add hybrid overlay port for node %s"+
 				", stderr:%s: %v", node.Name, stderr, err)
 		}
+
+	}
+
+	if err := m.kube.SetAnnotationOnNode(node, types.HybridOverlayDrMac, portMAC.String()); err != nil {
+		return fmt.Errorf("Failed to set node %q HybridOverlayDrMac annotation: %v", node.Name, err)
 	}
 
 	return nil
@@ -231,7 +214,7 @@ func (m *MasterController) handleOverlayPort(node *kapi.Node) error {
 
 func (m *MasterController) deleteOverlayPort(node *kapi.Node) {
 	portName := houtil.GetHybridOverlayPortName(node.Name)
-	_, _, _ = util.RunOVNNbctl("--", "--if-exists", "lsp-del", node.Name, portName)
+	_, _, _ = util.RunOVNNbctl("--", "--if-exists", "lsp-del", portName)
 }
 
 // Add handles node additions
