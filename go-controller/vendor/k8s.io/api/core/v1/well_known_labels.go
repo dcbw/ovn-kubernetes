@@ -23,7 +23,7 @@ const (
 
 	LabelInstanceType = "beta.kubernetes.io/instance-type"
 
-	LabelOSStable   = "kubernetes.io/os"
+	LabelOSStable   = "beta.kubernetes.io/os"
 	LabelArchStable = "kubernetes.io/arch"
 
 	// LabelNamespaceSuffixKubelet is an allowed label namespace suffix kubelets can self-set ([*.]kubelet.kubernetes.io/*)
