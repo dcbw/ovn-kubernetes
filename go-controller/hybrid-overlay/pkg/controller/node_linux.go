@@ -17,7 +17,6 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	kapi "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -30,6 +29,7 @@ const (
 // NodeController is the node hybrid overlay controller
 type NodeController struct {
 	kube     *kube.Kube
+	subnet   *net.IPNet
 	nodeName string
 	drMAC    string
 }
@@ -40,16 +40,10 @@ type NodeController struct {
 //  1. Setting up a VXLAN gateway and hooking to the OVN gateway
 //  2. Setting back annotations about its VTEP and gateway MAC address to its own object
 func NewNode(clientset kubernetes.Interface, nodeName string) (*NodeController, error) {
-	n := &NodeController{
+	return &NodeController{
 		kube:     &kube.Kube{KClient: clientset},
 		nodeName: nodeName,
-	}
-
-	if err := n.initHybridOverlayBridge(nodeName); err != nil {
-		return nil, err
-	}
-
-	return n, nil
+	}, nil
 }
 
 func podToCookie(pod *kapi.Pod) string {
@@ -159,10 +153,7 @@ func (n *NodeController) syncPods(pods []interface{}) {
 
 // Start is the top level function to run hybrid-sdn in node mode
 func (n *NodeController) Start(wf *factory.WatchFactory, stopChan chan struct{}) error {
-	nodeSelector := &metav1.LabelSelector{
-		MatchLabels: map[string]string{kapi.LabelOSStable: "windows"},
-	}
-	if err := houtil.StartNodeWatch(nodeSelector, n, wf, stopChan); err != nil {
+	if err := houtil.StartNodeWatch(n, wf, stopChan); err != nil {
 		return err
 	}
 
@@ -231,6 +222,12 @@ func (n *NodeController) nodeAddOrUpdate(node *kapi.Node) error {
 
 // Add handles node additions
 func (n *NodeController) Add(node *kapi.Node) {
+	if node.Name == n.nodeName {
+		if err := n.ensureHybridOverlayBridge(); err != nil {
+			logrus.Errorf(err.Error())
+		}
+	}
+
 	if err := n.nodeAddOrUpdate(node); err != nil {
 		logrus.Warning(err)
 	}
@@ -264,11 +261,23 @@ func (n *NodeController) Delete(node *kapi.Node) {
 	}
 }
 
-// Sync handles removing stale nodes on startup
+// Sync handles local node initialization and removing stale nodes on startup
 func (n *NodeController) Sync(nodes []*kapi.Node) {
+	// Ensure our local hybrid overlay is initialized
+	for _, node := range nodes {
+		if node.Name == n.nodeName {
+			if err := n.ensureHybridOverlayBridge(); err != nil {
+				logrus.Errorf(err.Error())
+			}
+			break
+		}
+	}
+
 	kubeNodes := make(map[string]bool)
 	for _, node := range nodes {
-		kubeNodes[nodeNameToCookie(node.Name)] = true
+		if houtil.IsWindowsNode(node) {
+			kubeNodes[nodeNameToCookie(node.Name)] = true
+		}
 	}
 
 	stdout, stderr, err := util.RunOVSOfctl("dump-flows", extBridgeName, "table=0")
@@ -346,12 +355,28 @@ func getIPAsHexString(ip net.IP) string {
 	return asHex
 }
 
-func (n *NodeController) initHybridOverlayBridge(nodeName string) error {
-	subnet, err := getLocalNodeSubnet(nodeName)
-	if err != nil {
-		return err
+func (n *NodeController) ensureHybridOverlayBridge() error {
+	if n.subnet == nil {
+		var err error
+		if n.subnet, err = getLocalNodeSubnet(n.nodeName); err != nil {
+			return err
+		}
 	}
 
+	portName := houtil.GetHybridOverlayPortName(n.nodeName)
+
+	// If the master hasn't yet created our hybrid overlay port, try again later
+	portMAC, portIP, _ := util.GetPortAddresses(portName)
+	if portMAC == nil || portIP == nil {
+		return nil
+	}
+
+	// if our bridge already exists, nothing to do
+	if _, _, err := util.RunOVSVsctl("br-exists", extBridgeName); err == nil {
+		return nil
+	}
+
+	// Otherwise set things up
 	_, stderr, err := util.RunOVSVsctl("--may-exist", "add-br", extBridgeName,
 		"--", "set", "Bridge", extBridgeName, "fail_mode=secure")
 	if err != nil {
@@ -380,7 +405,6 @@ func (n *NodeController) initHybridOverlayBridge(nodeName string) error {
 		rampExt string = "ext"
 		portNum string = "11"
 	)
-	portName := rampInt + "-" + nodeName
 	_, stderr, err = util.RunOVSVsctl("--may-exist", "add-port", "br-int", rampInt,
 		"--", "--may-exist", "add-port", extBridgeName, rampExt,
 		"--", "set", "Interface", rampInt, "type=patch", "options:peer="+rampExt, "external-ids:iface-id="+portName,
@@ -394,27 +418,6 @@ func (n *NodeController) initHybridOverlayBridge(nodeName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to set up hybrid overlay bridge default drop rule,"+
 			"stderr: %q, error: %v", stderr, err)
-	}
-
-	portMAC, portIP, _ := util.GetPortAddresses(portName)
-	if portMAC == nil || portIP == nil {
-		if portMAC == nil {
-			portMAC, _ = net.ParseMAC(util.GenerateMac())
-		}
-		if portIP == nil {
-			// Get the 3rd address in the node's subnet; the first is taken
-			// by the k8s-cluster-router port, the second by the management port
-			first := util.NextIP(subnet.IP)
-			second := util.NextIP(first)
-			portIP = util.NextIP(second)
-		}
-
-		_, stderr, err = util.RunOVNNbctl("--", "--may-exist", "lsp-add", nodeName, portName,
-			"--", "lsp-set-addresses", portName, portMAC.String()+" "+portIP.String())
-		if err != nil {
-			return fmt.Errorf("Failed to add hybrid overlay port for ovs bridge %s"+
-				", stderr:%s: %v", extBridgeName, stderr, err)
-		}
 	}
 
 	// Handle ARP for gateway address internally
@@ -436,7 +439,7 @@ func (n *NodeController) initHybridOverlayBridge(nodeName string) error {
 
 	// Send incoming VXLAN traffic to the pod dispatch table
 	_, stderr, err = util.RunOVSOfctl("-O", "openflow13", "add-flow", extBridgeName,
-		fmt.Sprintf("table=0, priority=100, in_port=ext-vxlan, ip, nw_dst=%s, dl_dst=%s, actions=goto_table:10", subnet.String(), portMAC.String()))
+		fmt.Sprintf("table=0, priority=100, in_port=ext-vxlan, ip, nw_dst=%s, dl_dst=%s, actions=goto_table:10", n.subnet.String(), portMAC.String()))
 	if err != nil {
 		return fmt.Errorf("failed to set up hybrid overlay bridge ARP flow,"+
 			"stderr: %q, error: %v", stderr, err)
@@ -449,13 +452,13 @@ func (n *NodeController) initHybridOverlayBridge(nodeName string) error {
 			"stderr: %q, error: %v", stderr, err)
 	}
 
-	thisNode, err := n.kube.GetNode(nodeName)
+	thisNode, err := n.kube.GetNode(n.nodeName)
 	if err != nil {
 		return err
 	}
 
 	if err := n.kube.SetAnnotationOnNode(thisNode, types.HybridOverlayDrMac, portMAC.String()); err != nil {
-		return fmt.Errorf("Failed to set node %q HybridOverlayDrMac annotation: %v", nodeName, err)
+		return fmt.Errorf("Failed to set node %q HybridOverlayDrMac annotation: %v", n.nodeName, err)
 	}
 	n.drMAC = portMAC.String()
 

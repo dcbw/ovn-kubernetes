@@ -9,9 +9,12 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
 
 	kapi "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
+
+func GetHybridOverlayPortName(nodeName string) string {
+	return "int-" + nodeName
+}
 
 // IsWindowsNode returns true if the node has been labeled as a Windows node
 func IsWindowsNode(node *kapi.Node) bool {
@@ -30,8 +33,8 @@ func GetNodeInternalIP(node *kapi.Node) (string, error) {
 }
 
 // StartNodeWatch starts a node event handler
-func StartNodeWatch(nodeSelector *metav1.LabelSelector, h types.NodeHandler, wf *factory.WatchFactory, stopChan chan struct{}) error {
-	_, err := wf.AddFilteredNodeHandler(nodeSelector, cache.ResourceEventHandlerFuncs{
+func StartNodeWatch(h types.NodeHandler, wf *factory.WatchFactory, stopChan chan struct{}) error {
+	_, err := wf.AddNodeHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			node := obj.(*kapi.Node)
 			logrus.Debugf("node ADD event for %q", node.Name)

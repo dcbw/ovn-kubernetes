@@ -55,7 +55,7 @@ func NewNode(clientset kubernetes.Interface, nodeName string) (*NodeController, 
 
 // Start is the top level function to run hybrid-sdn in node mode
 func (n *NodeController) Start(wf *factory.WatchFactory, stopChan chan struct{}) error {
-	return houtil.StartNodeWatch(nil, n, wf, stopChan)
+	return houtil.StartNodeWatch(n, wf, stopChan)
 }
 
 // Add function learns about a new node being added to the cluster

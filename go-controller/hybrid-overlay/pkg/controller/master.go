@@ -8,11 +8,12 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ovn-org/ovn-kubernetes/go-controller/hybrid-overlay/pkg/types"
-	"github.com/ovn-org/ovn-kubernetes/go-controller/hybrid-overlay/pkg/util"
+	houtil "github.com/ovn-org/ovn-kubernetes/go-controller/hybrid-overlay/pkg/util"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/kube"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	"github.com/openshift/origin/pkg/util/netutils"
 	kapi "k8s.io/api/core/v1"
@@ -37,7 +38,7 @@ func NewMaster(clientset kubernetes.Interface, subnets []config.CIDRNetworkEntry
 		return nil, fmt.Errorf("Error in initializing/fetching subnets: %v", err)
 	}
 	for _, node := range existingNodes.Items {
-		if util.IsWindowsNode(&node) {
+		if houtil.IsWindowsNode(&node) {
 			hostsubnet, ok := node.Annotations[types.HybridOverlayHostSubnet]
 			if ok {
 				alreadyAllocated = append(alreadyAllocated, hostsubnet)
@@ -74,7 +75,7 @@ func NewMaster(clientset kubernetes.Interface, subnets []config.CIDRNetworkEntry
 
 // Start is the top level function to run hybrid overlay in master mode
 func (m *MasterController) Start(wf *factory.WatchFactory, stopChan chan struct{}) error {
-	return util.StartNodeWatch(nil, m, wf, stopChan)
+	return houtil.StartNodeWatch(m, wf, stopChan)
 }
 
 func parseNodeHostSubnet(node *kapi.Node, annotation string) (*net.IPNet, error) {
@@ -85,10 +86,26 @@ func parseNodeHostSubnet(node *kapi.Node, annotation string) (*net.IPNet, error)
 
 	_, subnet, err := net.ParseCIDR(sub)
 	if err != nil {
-		return nil, fmt.Errorf("Error in parsing %q hostsubnet: %v", annotation, err)
+		return nil, fmt.Errorf("error parsing node %s annotation %s value %q: %v",
+			node.Name, annotation, sub, err)
 	}
 
 	return subnet, nil
+}
+
+func parseNodeDRMAC(node *kapi.Node) (net.HardwareAddr, error) {
+	drmac, ok := node.Annotations[types.HybridOverlayDrMac]
+	if !ok {
+		return nil, nil
+	}
+
+	hwaddr, err := net.ParseMAC(drmac)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing node %s annotation %s value %q: %v",
+			node.Name, types.HybridOverlayDrMac, drmac, err)
+	}
+
+	return hwaddr, nil
 }
 
 func sameCIDR(a, b *net.IPNet) bool {
@@ -105,7 +122,7 @@ func (m *MasterController) updateNodeAnnotation(node *kapi.Node) {
 	ovnHostsubnet, _ := parseNodeHostSubnet(node, ovn.OvnHostSubnet)
 
 	var err error
-	if !util.IsWindowsNode(node) {
+	if !houtil.IsWindowsNode(node) {
 		if ovnHostsubnet == nil {
 			if extHostsubnet != nil {
 				// remove any HybridOverlayHostSubnet
@@ -166,14 +183,69 @@ func (m *MasterController) updateNodeAnnotation(node *kapi.Node) {
 	}
 }
 
+func (m *MasterController) handleOverlayPort(node *kapi.Node) error {
+	// Only applicable to Linux nodes
+	if houtil.IsWindowsNode(node) {
+		return nil
+	}
+
+	drMAC, err := parseNodeDRMAC(node)
+	if drMAC == nil || err != nil {
+		// No DRMAC; clean up
+		m.deleteOverlayPort(node)
+		return err
+	}
+
+	subnet, err := parseNodeHostSubnet(node, ovn.OvnHostSubnet)
+	if subnet == nil || err != nil {
+		// No subnet allocated yet; clean up
+		m.deleteOverlayPort(node)
+		return err
+	}
+
+	portName := houtil.GetHybridOverlayPortName(node.Name)
+	portMAC, portIP, _ := util.GetPortAddresses(portName)
+	if portMAC == nil || portIP == nil {
+		if portMAC == nil {
+			portMAC, _ = net.ParseMAC(util.GenerateMac())
+		}
+		if portIP == nil {
+			// Get the 3rd address in the node's subnet; the first is taken
+			// by the k8s-cluster-router port, the second by the management port
+			first := util.NextIP(subnet.IP)
+			second := util.NextIP(first)
+			portIP = util.NextIP(second)
+		}
+
+		var stderr string
+		_, stderr, err = util.RunOVNNbctl("--", "--may-exist", "lsp-add", node.Name, portName,
+			"--", "lsp-set-addresses", portName, portMAC.String()+" "+portIP.String())
+		if err != nil {
+			return fmt.Errorf("failed to add hybrid overlay port for node %s"+
+				", stderr:%s: %v", node.Name, stderr, err)
+		}
+	}
+
+	return nil
+}
+
+func (m *MasterController) deleteOverlayPort(node *kapi.Node) {
+	portName := houtil.GetHybridOverlayPortName(node.Name)
+	_, _, _ = util.RunOVNNbctl("--", "--if-exists", "lsp-del", node.Name, portName)
+}
+
 // Add handles node additions
 func (m *MasterController) Add(node *kapi.Node) {
 	m.updateNodeAnnotation(node)
+
+	if err := m.handleOverlayPort(node); err != nil {
+		logrus.Warningf("failed to set up hybrid overlay logical switch port for %s: %v", node.Name, err)
+	}
 }
 
 // Update handles node updates
 func (m *MasterController) Update(oldNode, newNode *kapi.Node) {
-	m.updateNodeAnnotation(newNode)
+	m.Add(newNode)
 }
 
 // Delete handles node deletions
@@ -185,15 +257,21 @@ func (m *MasterController) Delete(node *kapi.Node) {
 		return
 	}
 
+	var found bool
 	for _, possibleSubnet := range m.allocator {
 		if err := possibleSubnet.ReleaseNetwork(nodeSubnet); err == nil {
 			logrus.Infof("Deleted HostSubnet %v for node %s", nodeSubnet, node.Name)
-			return
+			found = true
+			break
 		}
 	}
-	// SubnetAllocator.network is an unexported field so the only way to figure out if a subnet is in a network is to try and delete it
-	// if deletion succeeds then stop iterating, if the list is exhausted the node subnet wasn't deleteted return err
-	logrus.Errorf("Error deleting subnet %v for node %q: subnet not found in any CIDR range or already available", nodeSubnet, node.Name)
+	if !found {
+		// SubnetAllocator.network is an unexported field so the only way to figure out if a subnet is in a network is to try and delete it
+		// if deletion succeeds then stop iterating, if the list is exhausted the node subnet wasn't deleteted return err
+		logrus.Errorf("Error deleting subnet %v for node %q: subnet not found in any CIDR range or already available", nodeSubnet, node.Name)
+	}
+
+	m.deleteOverlayPort(node)
 }
 
 // Sync handles synchronizing the initial node list
