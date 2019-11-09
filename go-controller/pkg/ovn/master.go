@@ -3,6 +3,7 @@ package ovn
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	kapi "k8s.io/api/core/v1"
@@ -23,6 +24,18 @@ const (
 	OvnClusterRouter = "ovn_cluster_router"
 	// OvnNodeManagementPortMacAddress is the constant string representing the annotation key
 	OvnNodeManagementPortMacAddress = "k8s.ovn.org/node-mgmt-port-mac-address"
+	// OvnNodeGatewayMode is the mode of the gateway
+	OvnNodeGatewayMode = "k8s.ovn.org/node-gateway-mode"
+	// OvnNodeGatewayVlanID is the vlanid used by the gateway
+	OvnNodeGatewayVlanID = "k8s.ovn.org/node-gateway-vlan-id"
+	// OvnNodeGatewayIfaceID is the interfaceID of the gateway
+	OvnNodeGatewayIfaceID = "k8s.ovn.org/node-gateway-iface-id"
+	// OvnNodeGatewayMacAddress is the MacAddress of the Gateway interface
+	OvnNodeGatewayMacAddress = "k8s.ovn.org/node-gateway-mac-address"
+	// OvnNodeGatewayIP is the IP address of the Gateway
+	OvnNodeGatewayIP = "k8s.ovn.org/node-gateway-ip"
+	// OvnNodeGatewayNextHop is the Next Hop
+	OvnNodeGatewayNextHop = "k8s.ovn.org/node-gateway-next-hop"
 )
 
 // StartClusterMaster runs a subnet IPAM and a controller that watches arrival/departure
@@ -206,7 +219,7 @@ func parseNodeManagementPortMacAddr(node *kapi.Node) (string, error) {
 	return macAddress, nil
 }
 
-func (oc *Controller) syncNodeManagementPort(node *kapi.Node) error {
+func (oc *Controller) syncNodeManagementPort(node *kapi.Node, subnet *net.IPNet) error {
 
 	macAddress, err := parseNodeManagementPortMacAddr(node)
 	if err != nil {
@@ -223,9 +236,11 @@ func (oc *Controller) syncNodeManagementPort(node *kapi.Node) error {
 		return nil
 	}
 
-	subnet, err := parseNodeHostSubnet(node)
-	if err != nil {
-		return err
+	if subnet == nil {
+		subnet, err = parseNodeHostSubnet(node)
+		if err != nil {
+			return err
+		}
 	}
 
 	_, portIP := util.GetNodeWellKnownAddresses(subnet)
@@ -237,6 +252,141 @@ func (oc *Controller) syncNodeManagementPort(node *kapi.Node) error {
 	if err != nil {
 		logrus.Errorf("Failed to add logical port to switch, stdout: %q, stderr: %q, error: %v", stdout, stderr, err)
 		return err
+	}
+
+	return nil
+}
+
+func parseGatewayIfaceID(node *kapi.Node) (string, error) {
+	ifaceID, ok := node.Annotations[OvnNodeGatewayIfaceID]
+	if !ok || ifaceID == "" {
+		return "", fmt.Errorf("%s annotation not found or invalid for node %q ", OvnNodeGatewayIfaceID, node.Name)
+	}
+
+	return ifaceID, nil
+}
+
+func parseGatewayMacAddress(node *kapi.Node) (string, error) {
+	gatewayMacAddress, ok := node.Annotations[OvnNodeGatewayMacAddress]
+	if !ok {
+		return "", fmt.Errorf("%s annotation not found for node %q ", OvnNodeGatewayMacAddress, node.Name)
+	}
+
+	_, err := net.ParseMAC(gatewayMacAddress)
+	if err != nil {
+		return "", fmt.Errorf("Error %v in parsing node gateway macAddress %v", err, gatewayMacAddress)
+	}
+
+	return gatewayMacAddress, nil
+}
+
+func parseGatewayLogicalNetwork(node *kapi.Node) (string, string, error) {
+	ipAddress, ok := node.Annotations[OvnNodeGatewayIP]
+	if !ok {
+		return "", "", fmt.Errorf("%s annotation not found for node %q ", OvnNodeGatewayIP, node.Name)
+	}
+
+	gwNextHop, ok := node.Annotations[OvnNodeGatewayNextHop]
+	if !ok {
+		return "", "", fmt.Errorf("%s annotation not found for node %q ", OvnNodeGatewayNextHop, node.Name)
+	}
+
+	return ipAddress, gwNextHop, nil
+}
+
+func parseGatewayVLANID(node *kapi.Node, ifaceID string) ([]string, error) {
+
+	var lspArgs []string
+	vID, ok := node.Annotations[OvnNodeGatewayVlanID]
+	if !ok {
+		return nil, fmt.Errorf("%s annotation not found for node %q ", OvnNodeGatewayVlanID, node.Name)
+	}
+
+	vlanID, errVlan := strconv.Atoi(vID)
+	if errVlan != nil {
+		return nil, fmt.Errorf("%s annotation has an invalid format for node %q ", OvnNodeGatewayVlanID, node.Name)
+	}
+	if vlanID > 0 {
+		lspArgs = []string{"--", "set", "logical_switch_port",
+			ifaceID, fmt.Sprintf("tag_request=%d", vlanID)}
+	}
+
+	return lspArgs, nil
+}
+
+func (oc *Controller) syncGatewayLogicalNetwork(node *kapi.Node, mode string, subnet string) error {
+
+	var err error
+
+	var clusterSubnets []string
+	for _, clusterSubnet := range config.Default.ClusterSubnets {
+		clusterSubnets = append(clusterSubnets, clusterSubnet.CIDR.String())
+	}
+
+	ifaceID, err := parseGatewayIfaceID(node)
+	if err != nil {
+		return err
+	}
+
+	gwMacAddress, err := parseGatewayMacAddress(node)
+	if err != nil {
+		return err
+	}
+
+	ipAddress, gwNextHop, err := parseGatewayLogicalNetwork(node)
+	if err != nil {
+		return err
+	}
+
+	var lspArgs []string
+	var lspErr error
+	if mode == string(config.GatewayModeShared) {
+		lspArgs, lspErr = parseGatewayVLANID(node, ifaceID)
+		if lspErr != nil {
+			return lspErr
+		}
+	}
+
+	err = util.GatewayInit(clusterSubnets, node.Name, ifaceID, ipAddress,
+		gwMacAddress, gwNextHop, subnet, true, lspArgs)
+	if err != nil {
+		return fmt.Errorf("failed to init shared interface gateway: %v", err)
+	}
+
+	if mode == string(config.GatewayModeShared) {
+		// Add static routes to OVN Cluster Router to enable pods on this Node to
+		// reach the host IP
+		err = addStaticRouteToHost(node, ipAddress)
+		if err != nil {
+			return err
+		}
+	}
+
+	if config.Gateway.NodeportEnable {
+		err = oc.handleNodePortLB(node)
+	}
+
+	return err
+}
+
+func addStaticRouteToHost(node *kapi.Node, nicIP string) error {
+	k8sClusterRouter, err := util.GetK8sClusterRouter()
+	if err != nil {
+		return err
+	}
+
+	subnet, err := parseNodeHostSubnet(node)
+	if err != nil {
+		return fmt.Errorf("failed to get interface IP address for %s (%v)",
+			util.GetK8sMgmtIntfName(node.Name), err)
+	}
+	_, secondIP := util.GetNodeWellKnownAddresses(subnet)
+	prefix := strings.Split(nicIP, "/")[0] + "/32"
+	nexthop := strings.Split(secondIP.String(), "/")[0]
+	_, stderr, err := util.RunOVNNbctl("--may-exist", "lr-route-add", k8sClusterRouter, prefix, nexthop)
+	if err != nil {
+		return fmt.Errorf("failed to add static route '%s via %s' for host %q on %s "+
+			"stderr: %q, error: %v", nicIP, secondIP, node.Name, k8sClusterRouter, stderr, err)
 	}
 
 	return nil
@@ -348,13 +498,13 @@ func (oc *Controller) ensureNodeLogicalNetwork(nodeName string, hostsubnet *net.
 	return nil
 }
 
-func (oc *Controller) addNode(node *kapi.Node) (err error) {
+func (oc *Controller) addNode(node *kapi.Node) (hostsubnet *net.IPNet, err error) {
 	oc.clearInitialNodeNetworkUnavailableCondition(node)
 
-	hostsubnet, _ := parseNodeHostSubnet(node)
+	hostsubnet, _ = parseNodeHostSubnet(node)
 	if hostsubnet != nil {
 		// Node already has subnet assigned; ensure its logical network is set up
-		return oc.ensureNodeLogicalNetwork(node.Name, hostsubnet)
+		return hostsubnet, oc.ensureNodeLogicalNetwork(node.Name, hostsubnet)
 	}
 
 	// Node doesn't have a subnet assigned; reserve a new one for it
@@ -366,13 +516,13 @@ func (oc *Controller) addNode(node *kapi.Node) (err error) {
 			// Current subnet exhausted, check next possible subnet
 			continue
 		} else if err != nil {
-			return fmt.Errorf("Error allocating network for node %s: %v", node.Name, err)
+			return nil, fmt.Errorf("Error allocating network for node %s: %v", node.Name, err)
 		}
 		logrus.Infof("Allocated node %s HostSubnet %s", node.Name, hostsubnet.String())
 		break
 	}
 	if err == netutils.ErrSubnetAllocatorFull {
-		return fmt.Errorf("Error allocating network for node %s: %v", node.Name, err)
+		return nil, fmt.Errorf("Error allocating network for node %s: %v", node.Name, err)
 	}
 
 	defer func() {
@@ -385,7 +535,7 @@ func (oc *Controller) addNode(node *kapi.Node) (err error) {
 	// Ensure that the node's logical network has been created
 	err = oc.ensureNodeLogicalNetwork(node.Name, hostsubnet)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Set the HostSubnet annotation on the node object to signal
@@ -395,10 +545,10 @@ func (oc *Controller) addNode(node *kapi.Node) (err error) {
 	if err != nil {
 		logrus.Errorf("Failed to set node %s host subnet annotation to %q: %v",
 			node.Name, hostsubnet.String(), err)
-		return err
+		return nil, err
 	}
 
-	return nil
+	return hostsubnet, nil
 }
 
 func (oc *Controller) deleteNodeHostSubnet(nodeName string, subnet *net.IPNet) error {
@@ -442,7 +592,7 @@ func (oc *Controller) deleteNode(nodeName string, nodeSubnet *net.IPNet) error {
 	}
 
 	if nodeSubnet != nil {
-		if err := util.GatewayCleanup(nodeName, nodeSubnet.String()); err != nil {
+		if err := util.GatewayCleanup(nodeName, nodeSubnet); err != nil {
 			return fmt.Errorf("Failed to clean up node %s gateway: (%v)", nodeName, err)
 		}
 	}

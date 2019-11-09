@@ -3,6 +3,7 @@ package ovn
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -456,6 +457,29 @@ func (oc *Controller) WatchNamespaces() error {
 	return err
 }
 
+func (oc *Controller) handleNodeGateway(node *kapi.Node) error {
+	var gatewayConfigured bool
+	subnet, err := parseNodeHostSubnet(node)
+	if err == nil {
+		mode := node.Annotations[OvnNodeGatewayMode]
+		if mode != string(config.GatewayModeDisabled) {
+			if err = oc.syncGatewayLogicalNetwork(node, mode, subnet.String()); err == nil {
+				gatewayConfigured = true
+			} else {
+				logrus.Errorf("error creating gateway for node %s: %v", node.Name, err)
+			}
+		}
+	}
+
+	if !gatewayConfigured {
+		if err := util.GatewayCleanup(node.Name, subnet); err != nil {
+			return fmt.Errorf("error cleaning up gateway for node %s: %v", node.Name, err)
+		}
+	}
+
+	return nil
+}
+
 // WatchNodes starts the watching of node resource and calls
 // back the appropriate handler logic
 func (oc *Controller) WatchNodes(nodeSelector *metav1.LabelSelector) error {
@@ -464,18 +488,22 @@ func (oc *Controller) WatchNodes(nodeSelector *metav1.LabelSelector) error {
 		AddFunc: func(obj interface{}) {
 			node := obj.(*kapi.Node)
 			logrus.Debugf("Added event for Node %q", node.Name)
-			err := oc.addNode(node)
+			hostSubnet, err := oc.addNode(node)
 			if err != nil {
 				logrus.Errorf("error creating subnet for node %s: %v", node.Name, err)
+				return
 			}
-			err = oc.syncNodeManagementPort(node)
+
+			err = oc.syncNodeManagementPort(node, hostSubnet)
 			if err != nil {
 				logrus.Errorf("error creating Node Management Port for node %s: %v", node.Name, err)
 			}
-			if !config.Gateway.NodeportEnable {
-				return
+
+			if err := oc.handleNodeGateway(node); err != nil {
+				logrus.Errorf(err.Error())
+			} else {
+				gatewaysHandled[node.Name] = true
 			}
-			gatewaysHandled[node.Name] = oc.handleNodePortLB(node)
 		},
 		UpdateFunc: func(old, new interface{}) {
 			oldNode := old.(*kapi.Node)
@@ -484,16 +512,18 @@ func (oc *Controller) WatchNodes(nodeSelector *metav1.LabelSelector) error {
 			macAddress, _ := node.Annotations[OvnNodeManagementPortMacAddress]
 			logrus.Debugf("Updated event for Node %q", node.Name)
 			if oldMacAddress != macAddress {
-				err := oc.syncNodeManagementPort(node)
+				err := oc.syncNodeManagementPort(node, nil)
 				if err != nil {
 					logrus.Errorf("error update Node Management Port for node %s: %v", node.Name, err)
 				}
 			}
-			if !config.Gateway.NodeportEnable {
-				return
-			}
-			if !gatewaysHandled[node.Name] {
-				gatewaysHandled[node.Name] = oc.handleNodePortLB(node)
+
+			if !gatewaysHandled[node.Name] || gatewayChanged(oldNode, node) {
+				if err := oc.handleNodeGateway(node); err != nil {
+					logrus.Errorf(err.Error())
+				} else {
+					gatewaysHandled[node.Name] = true
+				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -535,4 +565,34 @@ func (oc *Controller) GetServiceVIPToName(vip string, protocol kapi.Protocol) (t
 	defer oc.serviceVIPToNameLock.Unlock()
 	namespace, ok := oc.serviceVIPToName[ServiceVIPKey{vip, protocol}]
 	return namespace, ok
+}
+
+// gatewayChanged() compares old annotations to new and returns true if something has changed.
+func gatewayChanged(oldNode, newNode *kapi.Node) bool {
+
+	if newNode.Annotations[OvnNodeGatewayMode] != oldNode.Annotations[OvnNodeGatewayMode] {
+		return true
+	}
+
+	if newNode.Annotations[OvnNodeGatewayVlanID] != oldNode.Annotations[OvnNodeGatewayVlanID] {
+		return true
+	}
+
+	if newNode.Annotations[OvnNodeGatewayIfaceID] != oldNode.Annotations[OvnNodeGatewayIfaceID] {
+		return true
+	}
+
+	if newNode.Annotations[OvnNodeGatewayMacAddress] != oldNode.Annotations[OvnNodeGatewayMacAddress] {
+		return true
+	}
+
+	if newNode.Annotations[OvnNodeGatewayIP] != oldNode.Annotations[OvnNodeGatewayIP] {
+		return true
+	}
+
+	if newNode.Annotations[OvnNodeGatewayNextHop] != oldNode.Annotations[OvnNodeGatewayNextHop] {
+		return true
+	}
+
+	return false
 }

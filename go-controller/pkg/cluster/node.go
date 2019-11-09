@@ -23,6 +23,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+type postReadyFn func() error
+
 func isOVNControllerReady(name string) (bool, error) {
 	const runDir string = "/var/run/openvswitch/"
 
@@ -77,8 +79,30 @@ func (cluster *OvnClusterController) StartClusterNode(name string) error {
 	var subnet *net.IPNet
 	var clusterSubnets []string
 	var cidr string
-
 	var wg sync.WaitGroup
+
+	if config.MasterHA.ManageDBServers {
+		var readyChan = make(chan bool, 1)
+
+		err = cluster.watchConfigEndpoints(readyChan)
+		if err != nil {
+			return err
+		}
+		// Hold until we are certain that the endpoint has been setup.
+		// We risk polling an inactive master if we don't wait while a new leader election is on-going
+		<-readyChan
+	} else {
+		for _, auth := range []config.OvnAuthConfig{config.OvnNorth, config.OvnSouth} {
+			if err := auth.SetDBAuth(); err != nil {
+				return err
+			}
+		}
+	}
+
+	err = setupOVNNode(name)
+	if err != nil {
+		return err
+	}
 
 	for _, clusterSubnet := range config.Default.ClusterSubnets {
 		clusterSubnets = append(clusterSubnets, clusterSubnet.CIDR.String())
@@ -107,34 +131,43 @@ func (cluster *OvnClusterController) StartClusterNode(name string) error {
 
 	logrus.Infof("Node %s ready for ovn initialization with subnet %s", node.Name, subnet.String())
 
-	err = cluster.watchConfigEndpoints()
-	if err != nil {
-		return err
-	}
-
-	err = setupOVNNode(name)
-	if err != nil {
-		return err
-	}
-
 	if _, err = isOVNControllerReady(name); err != nil {
 		return err
 	}
 
-	type readyFunc func(string) (bool, error)
+	type readyFunc func(string, string) (bool, error)
 	var readyFuncs []readyFunc
+	var nodeAnnotations map[string]string
+	var postReady postReadyFn
 
+	// If gateway is enabled, get gateway annotations
+	if config.Gateway.Mode != config.GatewayModeDisabled {
+		nodeAnnotations, postReady, err = cluster.initGateway(node.Name, subnet.String())
+		if err != nil {
+			return err
+		}
+		readyFuncs = append(readyFuncs, GatewayReady)
+	}
+
+	// Get management port annotaitons
 	mgmtPortAnnotations, err := CreateManagementPort(node.Name, subnet, clusterSubnets)
 	if err != nil {
 		return err
 	}
 
 	readyFuncs = append(readyFuncs, ManagementPortReady)
+
+	// Combine mgmtPortAnnotations with any existing gwyAnnotations
+	for k, v := range mgmtPortAnnotations {
+		nodeAnnotations[k] = v
+	}
+
 	wg.Add(len(readyFuncs))
 
-	// Set management port macAddress as annotation
-	if err := cluster.Kube.SetAnnotationsOnNode(node, mgmtPortAnnotations); err != nil {
-		return fmt.Errorf("Failed to set node %s mgmt port macAddress annotation: %v", node.Name, mgmtPortAnnotations)
+	// Set node annotations
+	err = cluster.Kube.SetAnnotationsOnNode(node, nodeAnnotations)
+	if err != nil {
+		return fmt.Errorf("Failed to set node %s annotation: %v", node.Name, nodeAnnotations)
 	}
 
 	portName := "k8s-" + node.Name
@@ -144,7 +177,7 @@ func (cluster *OvnClusterController) StartClusterNode(name string) error {
 		go func(rf readyFunc) {
 			defer wg.Done()
 			err := wait.PollImmediate(500*time.Millisecond, 300*time.Second, func() (bool, error) {
-				return rf(portName)
+				return rf(node.Name, portName)
 			})
 			messages <- err
 		}(f)
@@ -160,8 +193,8 @@ func (cluster *OvnClusterController) StartClusterNode(name string) error {
 		}
 	}
 
-	if config.Gateway.Mode != config.GatewayModeDisabled {
-		err = cluster.initGateway(node.Name, clusterSubnets, subnet.String())
+	if postReady != nil {
+		err = postReady()
 		if err != nil {
 			return err
 		}
@@ -183,7 +216,7 @@ func (cluster *OvnClusterController) StartClusterNode(name string) error {
 	return err
 }
 
-func updateOVNConfig(ep *kapi.Endpoints) error {
+func updateOVNConfig(ep *kapi.Endpoints, readyChan chan bool) error {
 	masterIPList, southboundDBPort, northboundDBPort, err := util.ExtractDbRemotesFromEndpoint(ep)
 	if err != nil {
 		return err
@@ -195,20 +228,22 @@ func updateOVNConfig(ep *kapi.Endpoints) error {
 		if err := auth.SetDBAuth(); err != nil {
 			return err
 		}
-		logrus.Infof("OVN databases reconfigured, masterIP %s, northbound-db %d, southbound-db %d", ep.Subsets[0].Addresses[0].IP, northboundDBPort, southboundDBPort)
 	}
 
+	logrus.Infof("OVN databases reconfigured, masterIPs %v, northbound-db %v, southbound-db %v", masterIPList, northboundDBPort, southboundDBPort)
+
+	readyChan <- true
 	return nil
 }
 
 //watchConfigEndpoints starts the watching of Endpoint resource and calls back to the appropriate handler logic
-func (cluster *OvnClusterController) watchConfigEndpoints() error {
+func (cluster *OvnClusterController) watchConfigEndpoints(readyChan chan bool) error {
 	_, err := cluster.watchFactory.AddFilteredEndpointsHandler(config.Kubernetes.OVNConfigNamespace,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				ep := obj.(*kapi.Endpoints)
 				if ep.Name == "ovnkube-db" {
-					if err := updateOVNConfig(ep); err != nil {
+					if err := updateOVNConfig(ep, readyChan); err != nil {
 						logrus.Errorf(err.Error())
 					}
 				}
@@ -217,7 +252,7 @@ func (cluster *OvnClusterController) watchConfigEndpoints() error {
 				epNew := new.(*kapi.Endpoints)
 				epOld := old.(*kapi.Endpoints)
 				if !reflect.DeepEqual(epNew.Subsets, epOld.Subsets) && epNew.Name == "ovnkube-db" {
-					if err := updateOVNConfig(epNew); err != nil {
+					if err := updateOVNConfig(epNew, readyChan); err != nil {
 						logrus.Errorf(err.Error())
 					}
 				}
