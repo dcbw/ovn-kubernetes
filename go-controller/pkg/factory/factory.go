@@ -79,7 +79,7 @@ type informer struct {
 	events   []chan *event
 }
 
-func (i *informer) forEachQueuedHandler(f func(h *Handler)) {
+func (i *informer) forEachHandler(f func(h *Handler)) {
 	i.RLock()
 	curHandlers := make([]*Handler, 0, len(i.handlers))
 	for _, handler := range i.handlers {
@@ -92,19 +92,13 @@ func (i *informer) forEachQueuedHandler(f func(h *Handler)) {
 	}
 }
 
-func (i *informer) forEachHandler(obj interface{}, f func(h *Handler)) {
-	i.Lock()
-	defer i.Unlock()
-
+func (i *informer) checkObjectType(obj interface{}) bool {
 	objType := reflect.TypeOf(obj)
 	if objType != i.oType {
 		logrus.Errorf("object type %v did not match expected %v", objType, i.oType)
-		return
+		return false
 	}
-
-	for _, handler := range i.handlers {
-		f(handler)
-	}
+	return true
 }
 
 func (i *informer) addHandler(id uint64, filterFunc func(obj interface{}) bool, funcs cache.ResourceEventHandler) *Handler {
@@ -154,15 +148,15 @@ func (i *informer) processEvents(events chan *event, stopChan <-chan struct{}) {
 			}
 			switch e.kind {
 			case addEvent:
-				i.forEachQueuedHandler(func(h *Handler) {
+				i.forEachHandler(func(h *Handler) {
 					h.OnAdd(e.obj)
 				})
 			case updateEvent:
-				i.forEachQueuedHandler(func(h *Handler) {
+				i.forEachHandler(func(h *Handler) {
 					h.OnUpdate(e.oldObj, e.obj)
 				})
 			case deleteEvent:
-				i.forEachQueuedHandler(func(h *Handler) {
+				i.forEachHandler(func(h *Handler) {
 					h.OnDelete(e.obj)
 				})
 			}
@@ -239,14 +233,18 @@ func (i *informer) newFederatedQueuedHandler() cache.ResourceEventHandlerFuncs {
 func (i *informer) newFederatedHandler() cache.ResourceEventHandlerFuncs {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			i.forEachHandler(obj, func(h *Handler) {
-				h.OnAdd(obj)
-			})
+			if i.checkObjectType(obj) {
+				i.forEachHandler(func(h *Handler) {
+					h.OnAdd(obj)
+				})
+			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			i.forEachHandler(newObj, func(h *Handler) {
-				h.OnUpdate(oldObj, newObj)
-			})
+			if i.checkObjectType(newObj) {
+				i.forEachHandler(func(h *Handler) {
+					h.OnUpdate(oldObj, newObj)
+				})
+			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			realObj, err := ensureObjectOnDelete(obj, i.oType)
@@ -254,7 +252,7 @@ func (i *informer) newFederatedHandler() cache.ResourceEventHandlerFuncs {
 				logrus.Errorf(err.Error())
 				return
 			}
-			i.forEachHandler(realObj, func(h *Handler) {
+			i.forEachHandler(func(h *Handler) {
 				h.OnDelete(realObj)
 			})
 		},
@@ -356,8 +354,6 @@ func NewWatchFactory(c kubernetes.Interface, stopChan chan struct{}) (*WatchFact
 
 	go func() {
 		<-stopChan
-
-		// Remove all informer handlers
 		for _, inf := range wf.informers {
 			inf.shutdown()
 		}
