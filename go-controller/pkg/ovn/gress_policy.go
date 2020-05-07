@@ -27,7 +27,7 @@ type gressPolicy struct {
 
 	// peerAddressSet points to the addressSet that holds all peer pod
 	// IP addresess.
-	peerAddressSet *addressSet
+	peerAddressSet AddressSet
 
 	// nsAddressSets holds the names of all namespace address sets
 	nsAddressSets sets.String
@@ -77,20 +77,20 @@ func newGressPolicy(policyType knet.PolicyType, idx int, namespace, name, portGr
 	}
 }
 
-func (gp *gressPolicy) ensurePeerAddressSet() error {
+func (gp *gressPolicy) ensurePeerAddressSet(factory AddressSetFactory) error {
 	if gp.peerAddressSet != nil {
 		return nil
 	}
 
 	direction := strings.ToLower(string(gp.policyType))
 	asName := fmt.Sprintf("%s.%s.%s.%d", gp.namespace, gp.name, direction, gp.idx)
-	as, err := NewAddressSet(asName, nil)
+	as, err := factory.NewAddressSet(asName, nil)
 	if err != nil {
 		return err
 	}
 
 	gp.peerAddressSet = as
-	gp.sortedPeerAddressSets = append(gp.sortedPeerAddressSets, as.hashName)
+	gp.sortedPeerAddressSets = append(gp.sortedPeerAddressSets, as.GetHashName())
 	sort.Strings(gp.sortedPeerAddressSets)
 	return nil
 }

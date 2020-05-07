@@ -76,7 +76,7 @@ func (oc *Controller) syncNetworkPolicies(networkPolicies []interface{}) {
 		}
 	}
 
-	err := forEachAddressSetUnhashedName(func(addrSetName, namespaceName, policyName string) {
+	err := oc.addressSetFactory.ForEachAddressSet(func(addrSetName, namespaceName, policyName string) {
 		if policyName != "" && !expectedPolicies[namespaceName][policyName] {
 			// policy doesn't exist on k8s. Delete the port group
 			portGroupName := fmt.Sprintf("%s_%s", namespaceName, policyName)
@@ -84,7 +84,7 @@ func (oc *Controller) syncNetworkPolicies(networkPolicies []interface{}) {
 			deletePortGroup(hashedLocalPortGroup)
 
 			// delete the address sets for this policy from OVN
-			oc.deleteAddressSetFromCache(addrSetName)
+			oc.addressSetFactory.DeleteAddressSet(addrSetName)
 		}
 	})
 	if err != nil {
@@ -632,7 +632,7 @@ func (oc *Controller) addNetworkPolicy(policy *knet.NetworkPolicy) {
 		}
 
 		if hasAnyLabelSelector(ingressJSON.From) {
-			if err := ingress.ensurePeerAddressSet(); err != nil {
+			if err := ingress.ensurePeerAddressSet(oc.addressSetFactory); err != nil {
 				klog.Errorf(err.Error())
 				continue
 			}
@@ -668,7 +668,7 @@ func (oc *Controller) addNetworkPolicy(policy *knet.NetworkPolicy) {
 		}
 
 		if hasAnyLabelSelector(egressJSON.To) {
-			if err := egress.ensurePeerAddressSet(); err != nil {
+			if err := egress.ensurePeerAddressSet(oc.addressSetFactory); err != nil {
 				klog.Errorf(err.Error())
 				continue
 			}

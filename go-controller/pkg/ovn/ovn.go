@@ -100,9 +100,8 @@ type Controller struct {
 	namespaces      map[string]*namespaceInfo
 	namespacesMutex sync.Mutex
 
-	// A cache of address sets and an associated mutex
-	addressSetCache      map[string]*addressSet
-	addressSetCacheMutex *sync.RWMutex
+	// A cache of address sets, an associated mutex, and an address set factory
+	addressSetFactory AddressSetFactory
 
 	// Port group for ingress deny rule
 	portGroupIngressDeny string
@@ -154,7 +153,11 @@ const (
 
 // NewOvnController creates a new OVN controller for creating logical network
 // infrastructure and policy
-func NewOvnController(kubeClient kubernetes.Interface, wf *factory.WatchFactory, stopChan <-chan struct{}) *Controller {
+func NewOvnController(kubeClient kubernetes.Interface, wf *factory.WatchFactory,
+	stopChan <-chan struct{}, addressSetFactory AddressSetFactory) *Controller {
+	if addressSetFactory == nil {
+		addressSetFactory = NewOvnAddressSetFactory()
+	}
 	return &Controller{
 		kube:                     &kube.Kube{KClient: kubeClient},
 		watchFactory:             wf,
@@ -165,8 +168,7 @@ func NewOvnController(kubeClient kubernetes.Interface, wf *factory.WatchFactory,
 		logicalPortCache:         newPortCache(stopChan),
 		namespaces:               make(map[string]*namespaceInfo),
 		namespacesMutex:          sync.Mutex{},
-		addressSetCache:          make(map[string]*addressSet),
-		addressSetCacheMutex:     &sync.RWMutex{},
+		addressSetFactory:        addressSetFactory,
 		lspIngressDenyCache:      make(map[string]int),
 		lspEgressDenyCache:       make(map[string]int),
 		lspMutex:                 &sync.Mutex{},
@@ -803,36 +805,4 @@ func shouldUpdate(node, oldNode *kapi.Node) (bool, error) {
 	}
 
 	return true, nil
-}
-
-// getAddressSetFromCacheLocked returns the named address set, locked, from the
-// cache or nil
-func (oc *Controller) getAddressSetFromCacheLocked(name string) *addressSet {
-	oc.addressSetCacheMutex.RLock()
-	defer oc.addressSetCacheMutex.RUnlock()
-	if as := oc.addressSetCache[name]; as != nil {
-		as.Lock()
-		return as
-	}
-	return nil
-}
-
-func (oc *Controller) addAddressSetToCache(as *addressSet) {
-	oc.addressSetCacheMutex.Lock()
-	defer oc.addressSetCacheMutex.Unlock()
-	oc.addressSetCache[as.name] = as
-}
-
-// deleteAddressSet removes the address set from OVN and if the address set
-// is known to the Controller, removes it from the controller's address set map
-func (oc *Controller) deleteAddressSetFromCache(name string) {
-	if as := oc.getAddressSetFromCacheLocked(name); as != nil {
-		as.DestroyUnlocked()
-		delete(oc.addressSetCache, name)
-	} else {
-		_, stderr, err := util.RunOVNNbctl("--if-exists", "destroy", "address_set", hashedAddressSet(name))
-		if err != nil {
-			klog.Errorf("failed to destroy address set %q, stderr: %q, (%v)", name, stderr, err)
-		}
-	}
 }
