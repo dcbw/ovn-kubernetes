@@ -44,7 +44,6 @@ func addNodeSetupCmds(fexec *ovntest.FakeExec, nodeName string) (string, string)
 		Cmd:    "ovn-nbctl --timeout=15 get logical_switch mynode other-config:subnet",
 		Output: testNodeSubnet,
 	})
-	addGetPortAddressesCmds(fexec, nodeName, testDRMAC, testNodeIP)
 	fexec.AddFakeCmd(&ovntest.ExpectedCmd{
 		Cmd:    "ovs-vsctl --timeout=15 --if-exists get interface ovn-k8s-mp0 mac_in_use",
 		Output: testMgmtMAC,
@@ -302,7 +301,6 @@ var _ = Describe("Hybrid Overlay Node Linux Operations", func() {
 
 			_, err := config.InitConfig(ctx, fexec, nil)
 			Expect(err).NotTo(HaveOccurred())
-
 			f := informers.NewSharedInformerFactory(fakeClient, informer.DefaultResyncInterval)
 
 			n, err := NewNode(
@@ -346,7 +344,6 @@ var _ = Describe("Hybrid Overlay Node Linux Operations", func() {
 
 			_, err := config.InitConfig(ctx, fexec, nil)
 			Expect(err).NotTo(HaveOccurred())
-
 			f := informers.NewSharedInformerFactory(fakeClient, informer.DefaultResyncInterval)
 
 			n, err := NewNode(
@@ -446,7 +443,6 @@ var _ = Describe("Hybrid Overlay Node Linux Operations", func() {
 
 			_, err := config.InitConfig(ctx, fexec, nil)
 			Expect(err).NotTo(HaveOccurred())
-
 			f := informers.NewSharedInformerFactory(fakeClient, informer.DefaultResyncInterval)
 
 			n, err := NewNode(
@@ -493,7 +489,6 @@ var _ = Describe("Hybrid Overlay Node Linux Operations", func() {
 
 			_, err := config.InitConfig(ctx, fexec, nil)
 			Expect(err).NotTo(HaveOccurred())
-
 			f := informers.NewSharedInformerFactory(fakeClient, informer.DefaultResyncInterval)
 
 			n, err := NewNode(
@@ -562,7 +557,6 @@ var _ = Describe("Hybrid Overlay Node Linux Operations", func() {
 
 			_, err := config.InitConfig(ctx, fexec, nil)
 			Expect(err).NotTo(HaveOccurred())
-
 			f := informers.NewSharedInformerFactory(fakeClient, informer.DefaultResyncInterval)
 
 			n, err := NewNode(

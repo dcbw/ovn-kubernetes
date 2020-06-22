@@ -32,6 +32,8 @@ type MasterController struct {
 	nodeEventHandler      informer.EventHandler
 	namespaceEventHandler informer.EventHandler
 	podEventHandler       informer.EventHandler
+	ovnNBClient           util.OVNInterface
+	ovnSBClient           util.OVNInterface
 }
 
 // NewMaster a new master controller that listens for node events
@@ -39,10 +41,15 @@ func NewMaster(kube kube.Interface,
 	nodeInformer cache.SharedIndexInformer,
 	namespaceInformer cache.SharedIndexInformer,
 	podInformer cache.SharedIndexInformer,
+	ovnNBClient util.OVNInterface,
+	ovnSBClient util.OVNInterface,
 ) (*MasterController, error) {
+
 	m := &MasterController{
-		kube:      kube,
-		allocator: subnetallocator.NewSubnetAllocator(),
+		kube:        kube,
+		allocator:   subnetallocator.NewSubnetAllocator(),
+		ovnNBClient: ovnNBClient,
+		ovnSBClient: ovnSBClient,
 	}
 
 	m.nodeEventHandler = informer.NewDefaultEventHandler("node", nodeInformer,
@@ -205,7 +212,7 @@ func (m *MasterController) handleOverlayPort(node *kapi.Node, annotator kube.Ann
 	subnet := subnets[0]
 
 	portName := util.GetHybridOverlayPortName(node.Name)
-	portMAC, portIPs, _ := util.GetPortAddresses(portName)
+	portMAC, portIPs, _ := util.GetPortAddresses(portName, m.ovnNBClient)
 	if portMAC == nil || portIPs == nil {
 		if portIPs == nil {
 			portIPs = append(portIPs, util.GetNodeHybridOverlayIfAddr(subnet).IP)

@@ -230,12 +230,26 @@ func runOvnKube(ctx *cli.Context) error {
 		if runtime.GOOS == "windows" {
 			return fmt.Errorf("master nodes cannot be of OS type: Windows")
 		}
-		// register prometheus metrics exported by the master
-		metrics.RegisterMasterMetrics()
-		ovnController := ovn.NewOvnController(clientset, factory, stopChan, nil)
+		var ovnNBClient, ovnSBClient util.OVNInterface
+		var err error
+
+		if ovnNBClient, err = util.NewOVNNBDBClient(); err != nil {
+			klog.Errorf("error when trying to initialize go ovn NB client: %v", err)
+			return nil
+		}
+
+		if ovnSBClient, err = util.NewOVNSBDBClient(); err != nil {
+			klog.Errorf("error when trying to initialize go ovn SB client: %v", err)
+			return nil
+		}
+
+		ovnController := ovn.NewOvnController(clientset, factory, stopChan, nil, ovnNBClient, ovnSBClient)
 		if err := ovnController.Start(clientset, master); err != nil {
 			return err
 		}
+		// register prometheus metrics exported by the master
+		metrics.RegisterMasterMetrics(ovnNBClient, ovnSBClient)
+
 	}
 
 	if node != "" {
