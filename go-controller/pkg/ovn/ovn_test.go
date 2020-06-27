@@ -5,8 +5,8 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
-	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/mock"
 	ovntest "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
+	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing/mocks"
 	util "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	"github.com/urfave/cli/v2"

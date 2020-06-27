@@ -18,8 +18,8 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/informer"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/kube"
-	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/mock"
 	ovntest "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
+	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing/mocks"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	. "github.com/onsi/ginkgo"

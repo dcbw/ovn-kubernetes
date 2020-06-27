@@ -15,9 +15,9 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/kube"
-	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/mock"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/ipallocator"
 	ovntest "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
+	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing/mocks"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	. "github.com/onsi/ginkgo"

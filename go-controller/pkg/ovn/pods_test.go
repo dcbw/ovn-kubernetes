@@ -11,8 +11,8 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
-	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/mock"
 	ovntest "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
+	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing/mocks"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	v1 "k8s.io/api/core/v1"
