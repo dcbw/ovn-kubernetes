@@ -129,7 +129,7 @@ The above will create the certificate for the node called
 "ovncontroller-cert.pem". You should copy this certificate back to the
 node's /etc/openvswitch directory.
 
-Additionally, the common name used for signing the certificates (`ovn-controller`)
+Additionally, the common name used for signing the certificates (`ovncontroller`)
 needs to be passed in for TLS server certificate verification using the 
 `-nb-cert-common-name` and the `-sb-cert-common-name` CLI options.
 
