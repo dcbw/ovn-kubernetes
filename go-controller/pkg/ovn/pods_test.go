@@ -12,7 +12,6 @@ import (
 
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	ovntest "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
-	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing/mocks"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	v1 "k8s.io/api/core/v1"
@@ -355,14 +354,14 @@ var _ = Describe("OVN Pod Operations", func() {
 					},
 				})
 				t.populateLogicalSwitchCache(fakeOvn)
-				mockAddNBDBError(mock.LogicalSwitchPortType, t.portName,
-					mock.LogicalSwitchPortPortSecurity,
+				mockAddNBDBError(ovntest.LogicalSwitchPortType, t.portName,
+					ovntest.LogicalSwitchPortPortSecurity,
 					fmt.Errorf("injected dummy port security set error"),
 					fakeOvn.ovnNBClient)
 				fakeOvn.controller.WatchPods()
 				Expect(fExec.CalledMatchesExpected()).To(BeTrue(), fExec.ErrorDesc)
-				mockDelNBDBError(mock.LogicalSwitchPortType, t.portName,
-					mock.LogicalSwitchPortPortSecurity,
+				mockDelNBDBError(ovntest.LogicalSwitchPortType, t.portName,
+					ovntest.LogicalSwitchPortPortSecurity,
 					fakeOvn.ovnNBClient)
 
 				// Pod creation should be retried on Update event

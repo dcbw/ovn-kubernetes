@@ -26,6 +26,7 @@ import (
 	ovnnode "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/node"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 
 	kexec "k8s.io/utils/exec"
 )
@@ -230,25 +231,26 @@ func runOvnKube(ctx *cli.Context) error {
 		if runtime.GOOS == "windows" {
 			return fmt.Errorf("master nodes cannot be of OS type: Windows")
 		}
-		var ovnNBClient, ovnSBClient util.OVNInterface
+		var ovnNBClient, ovnSBClient ovnbindings.OVNInterface
 		var err error
 
-		if ovnNBClient, err = util.NewOVNNBDBClient(); err != nil {
-			klog.Errorf("error when trying to initialize go ovn NB client: %v", err)
-			return nil
+		if ovnNBClient, err = util.NewOVNNBClient(); err != nil {
+			return fmt.Errorf("error when trying to initialize go-ovn NB client: %v", err)
 		}
 
-		if ovnSBClient, err = util.NewOVNSBDBClient(); err != nil {
-			klog.Errorf("error when trying to initialize go ovn SB client: %v", err)
-			return nil
+		if ovnSBClient, err = util.NewOVNSBClient(); err != nil {
+			return fmt.Errorf("error when trying to initialize go-ovn SB client: %v", err)
 		}
+
+		// register prometheus metrics exported by the master
+		// this must be done prior to calling controller start
+		// since we capture some metrics in Start()
+		metrics.RegisterMasterMetrics(ovnNBClient, ovnSBClient)
 
 		ovnController := ovn.NewOvnController(clientset, factory, stopChan, nil, ovnNBClient, ovnSBClient)
 		if err := ovnController.Start(clientset, master); err != nil {
 			return err
 		}
-		// register prometheus metrics exported by the master
-		metrics.RegisterMasterMetrics(ovnNBClient, ovnSBClient)
 
 	}
 

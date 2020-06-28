@@ -13,6 +13,7 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/kube"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/subnetallocator"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 
 	kapi "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -32,8 +33,8 @@ type MasterController struct {
 	nodeEventHandler      informer.EventHandler
 	namespaceEventHandler informer.EventHandler
 	podEventHandler       informer.EventHandler
-	ovnNBClient           util.OVNInterface
-	ovnSBClient           util.OVNInterface
+	ovnNBClient           ovnbindings.OVNInterface
+	ovnSBClient           ovnbindings.OVNInterface
 }
 
 // NewMaster a new master controller that listens for node events
@@ -41,8 +42,8 @@ func NewMaster(kube kube.Interface,
 	nodeInformer cache.SharedIndexInformer,
 	namespaceInformer cache.SharedIndexInformer,
 	podInformer cache.SharedIndexInformer,
-	ovnNBClient util.OVNInterface,
-	ovnSBClient util.OVNInterface,
+	ovnNBClient ovnbindings.OVNInterface,
+	ovnSBClient ovnbindings.OVNInterface,
 ) (*MasterController, error) {
 
 	m := &MasterController{

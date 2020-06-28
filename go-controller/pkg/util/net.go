@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	goovn "github.com/ebay/go-ovn"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 	utilnet "k8s.io/utils/net"
 )
 
@@ -30,7 +31,7 @@ func intToIP(i *big.Int) net.IP {
 }
 
 // GetPortAddresses returns the MAC and IPs of the given logical switch port
-func GetPortAddresses(portName string, ovnNBClient OVNInterface) (net.HardwareAddr, []net.IP, error) {
+func GetPortAddresses(portName string, ovnNBClient ovnbindings.OVNInterface) (net.HardwareAddr, []net.IP, error) {
 	lsp, err := ovnNBClient.LSPGet(portName)
 	if err != nil || lsp == nil {
 		// --if-exists handling in goovn

@@ -1,4 +1,4 @@
-package util
+package ovnbindings
 
 import (
 	goovn "github.com/ebay/go-ovn"

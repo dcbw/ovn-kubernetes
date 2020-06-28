@@ -8,6 +8,7 @@ import (
 	"time"
 
 	util "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 	"github.com/prometheus/client_golang/prometheus"
 
 	kapi "k8s.io/api/core/v1"
@@ -126,7 +127,7 @@ var ovnNorthdCoverageShowMetricsMap = map[string]*metricDetails{
 
 // RegisterMasterMetrics registers some ovnkube master metrics with the Prometheus
 // registry
-func RegisterMasterMetrics(nbClient util.OVNInterface, sbClient util.OVNInterface) {
+func RegisterMasterMetrics(nbClient, sbClient ovnbindings.OVNInterface) {
 	registerMasterMetricsOnce.Do(func() {
 		// ovnkube-master metrics
 		// the updater for this metric is activated
@@ -229,7 +230,7 @@ func RegisterMasterMetrics(nbClient util.OVNInterface, sbClient util.OVNInterfac
 	})
 }
 
-func scrapeOvnTimestamp(ovnSBClient util.OVNInterface) func() float64 {
+func scrapeOvnTimestamp(ovnSBClient ovnbindings.OVNInterface) func() float64 {
 	return func() float64 {
 		options, err := ovnSBClient.SBGlobalGetOptions()
 		if err != nil {
@@ -245,7 +246,7 @@ func scrapeOvnTimestamp(ovnSBClient util.OVNInterface) func() float64 {
 
 // StartE2ETimeStampMetricUpdater adds a goroutine that updates a "timestamp" value in the
 // nbdb every 30 seconds. This is so we can determine freshness of the database
-func StartE2ETimeStampMetricUpdater(stopChan <-chan struct{}, ovnNBClient util.OVNInterface) {
+func StartE2ETimeStampMetricUpdater(stopChan <-chan struct{}, ovnNBClient ovnbindings.OVNInterface) {
 	startE2ETimeStampUpdaterOnce.Do(func() {
 		go func() {
 			tsUpdateTicker := time.NewTicker(30 * time.Second)
@@ -254,7 +255,7 @@ func StartE2ETimeStampMetricUpdater(stopChan <-chan struct{}, ovnNBClient util.O
 				case <-tsUpdateTicker.C:
 					options, err := ovnNBClient.NBGlobalGetOptions()
 					if err != nil {
-						klog.Errorf("Can't get existing options for updating timestamps")
+						klog.Errorf("Can't get existing NB Global Options for updating timestamps")
 						continue
 					}
 					t := time.Now().Unix()
@@ -262,7 +263,6 @@ func StartE2ETimeStampMetricUpdater(stopChan <-chan struct{}, ovnNBClient util.O
 					cmd, err := ovnNBClient.NBGlobalSetOptions(options)
 					if err != nil {
 						klog.Errorf("Failed to bump timestamp: %v", err)
-						continue
 					} else {
 						err = cmd.Execute()
 						if err != nil {

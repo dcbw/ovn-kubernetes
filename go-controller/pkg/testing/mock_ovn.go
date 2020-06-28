@@ -1,10 +1,11 @@
-package mockovn
+package testing
 
 import (
 	"fmt"
 	"runtime"
+	"syscall"
 
-	util "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 	aggErrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/klog"
 )
@@ -31,7 +32,7 @@ type MockObjectCacheByName map[string]interface{}
 
 // provides Execute() interface
 type MockExecution interface {
-	Execute(cmds ...util.OVNCommandInterface) error
+	Execute(cmds ...ovnbindings.OVNCommandInterface) error
 }
 
 // mock ovn client for testing
@@ -42,9 +43,11 @@ type MockOVNClient struct {
 	// error injection
 	// keys are of the form: Table:Name:FieldType
 	errorCache map[string]error
+	// represents connected client
+	connected bool
 }
 
-var _ util.OVNInterface = &MockOVNClient{}
+var _ ovnbindings.OVNInterface = &MockOVNClient{}
 
 type MockOVNCommand struct {
 	Exe       MockExecution
@@ -56,7 +59,7 @@ type MockOVNCommand struct {
 }
 
 // MockOVNCommand implements OVNCommandInterface
-var _ util.OVNCommandInterface = &MockOVNCommand{}
+var _ ovnbindings.OVNCommandInterface = &MockOVNCommand{}
 
 // return a new mock client to operate on db
 func NewMockOVNClient(db string) *MockOVNClient {
@@ -64,6 +67,7 @@ func NewMockOVNClient(db string) *MockOVNClient {
 		db:         db,
 		cache:      make(map[string]MockObjectCacheByName),
 		errorCache: make(map[string]error),
+		connected:  true,
 	}
 }
 
@@ -81,12 +85,17 @@ func functionName() string {
 
 // Close connection to OVN
 func (mock *MockOVNClient) Close() error {
+	mock.connected = false
 	return nil
 }
 
 // Exec command, support multiple commands in one transaction.
 // executes commands ensuring their temporal consistency
-func (mock *MockOVNClient) Execute(cmds ...util.OVNCommandInterface) error {
+func (mock *MockOVNClient) Execute(cmds ...ovnbindings.OVNCommandInterface) error {
+	if !mock.connected {
+		return syscall.ENOTCONN
+	}
+
 	errors := make([]error, 0, len(cmds))
 	for _, cmd := range cmds {
 		// go over each mock command and apply the
@@ -94,8 +103,8 @@ func (mock *MockOVNClient) Execute(cmds ...util.OVNCommandInterface) error {
 		// cache
 		ovnCmd, ok := cmd.(*MockOVNCommand)
 		if !ok {
-			klog.Errorf("type assertion failed for mock command")
-			errors = append(errors, fmt.Errorf("type assertion failed for mock command"))
+			klog.Errorf("Type assertion failed for mock command")
+			panic("type assertion failed for mock command")
 		}
 		var cache MockObjectCacheByName
 		switch ovnCmd.op {

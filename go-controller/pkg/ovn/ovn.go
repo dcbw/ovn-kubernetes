@@ -16,6 +16,7 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/ipallocator"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/ovn/subnetallocator"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 
 	kapi "k8s.io/api/core/v1"
 	kapisnetworking "k8s.io/api/networking/v1"
@@ -141,10 +142,10 @@ type Controller struct {
 	recorder record.EventRecorder
 
 	// go-ovn northbound client interface
-	ovnNBClient util.OVNInterface
+	ovnNBClient ovnbindings.OVNInterface
 
 	// go-ovn southbound client interface
-	ovnSBClient util.OVNInterface
+	ovnSBClient ovnbindings.OVNInterface
 }
 
 const (
@@ -161,7 +162,7 @@ const (
 // NewOvnController creates a new OVN controller for creating logical network
 // infrastructure and policy
 func NewOvnController(kubeClient kubernetes.Interface, wf *factory.WatchFactory,
-	stopChan <-chan struct{}, addressSetFactory AddressSetFactory, ovnNBClient util.OVNInterface, ovnSBClient util.OVNInterface) *Controller {
+	stopChan <-chan struct{}, addressSetFactory AddressSetFactory, ovnNBClient ovnbindings.OVNInterface, ovnSBClient ovnbindings.OVNInterface) *Controller {
 
 	if addressSetFactory == nil {
 		addressSetFactory = NewOvnAddressSetFactory()

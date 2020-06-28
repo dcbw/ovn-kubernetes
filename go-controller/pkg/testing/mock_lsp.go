@@ -1,10 +1,10 @@
-package mockovn
+package testing
 
 import (
 	"fmt"
 
 	goovn "github.com/ebay/go-ovn"
-	util "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 	"k8s.io/klog"
 )
 
@@ -22,7 +22,7 @@ func (mock *MockOVNClient) LSPGet(lsp string) (*goovn.LogicalSwitchPort, error) 
 	var lspCache MockObjectCacheByName
 	var ok bool
 	if lspCache, ok = mock.cache[LogicalSwitchPortType]; !ok {
-		klog.V(5).Infof("cache doesn't have any object of type %s", LogicalSwitchPortType)
+		klog.V(5).Infof("Cache doesn't have any object of type %s", LogicalSwitchPortType)
 		return nil, goovn.ErrorSchema
 	}
 	var port interface{}
@@ -36,7 +36,7 @@ func (mock *MockOVNClient) LSPGet(lsp string) (*goovn.LogicalSwitchPort, error) 
 }
 
 // Add logical port PORT on SWITCH
-func (mock *MockOVNClient) LSPAdd(ls string, lsp string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPAdd(ls string, lsp string) (ovnbindings.OVNCommandInterface, error) {
 	klog.V(5).Infof("Adding lsp %s to switch %s", lsp, ls)
 	return &MockOVNCommand{
 		Exe:     mock,
@@ -48,7 +48,7 @@ func (mock *MockOVNClient) LSPAdd(ls string, lsp string) (util.OVNCommandInterfa
 }
 
 // Delete PORT from its attached switch
-func (mock *MockOVNClient) LSPDel(lsp string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPDel(lsp string) (ovnbindings.OVNCommandInterface, error) {
 	klog.V(5).Infof("Deleting lsp %s", lsp)
 	return &MockOVNCommand{
 		Exe:     mock,
@@ -59,7 +59,7 @@ func (mock *MockOVNClient) LSPDel(lsp string) (util.OVNCommandInterface, error) 
 }
 
 // Set addresses per lport
-func (mock *MockOVNClient) LSPSetAddress(lsp string, addresses ...string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetAddress(lsp string, addresses ...string) (ovnbindings.OVNCommandInterface, error) {
 	return &MockOVNCommand{
 		Exe:     mock,
 		op:      OpUpdate,
@@ -73,7 +73,7 @@ func (mock *MockOVNClient) LSPSetAddress(lsp string, addresses ...string) (util.
 }
 
 // Set port security per lport
-func (mock *MockOVNClient) LSPSetPortSecurity(lsp string, security ...string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetPortSecurity(lsp string, security ...string) (ovnbindings.OVNCommandInterface, error) {
 	return &MockOVNCommand{
 		Exe:     mock,
 		op:      OpUpdate,
@@ -93,7 +93,7 @@ func (mock *MockOVNClient) LSPList(ls string) ([]*goovn.LogicalSwitchPort, error
 }
 
 // Set dhcp4_options uuid on lsp
-func (mock *MockOVNClient) LSPSetDHCPv4Options(lsp string, options string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetDHCPv4Options(lsp string, options string) (ovnbindings.OVNCommandInterface, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -103,7 +103,7 @@ func (mock *MockOVNClient) LSPGetDHCPv4Options(lsp string) (*goovn.DHCPOptions, 
 }
 
 // Set dhcp6_options uuid on lsp
-func (mock *MockOVNClient) LSPSetDHCPv6Options(lsp string, options string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetDHCPv6Options(lsp string, options string) (ovnbindings.OVNCommandInterface, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -113,7 +113,7 @@ func (mock *MockOVNClient) LSPGetDHCPv6Options(lsp string) (*goovn.DHCPOptions, 
 }
 
 // Set options in LSP
-func (mock *MockOVNClient) LSPSetOptions(lsp string, options map[string]string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetOptions(lsp string, options map[string]string) (ovnbindings.OVNCommandInterface, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -123,7 +123,7 @@ func (mock *MockOVNClient) LSPGetOptions(lsp string) (map[string]string, error) 
 }
 
 // Set dynamic addresses in LSP
-func (mock *MockOVNClient) LSPSetDynamicAddresses(lsp string, address string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetDynamicAddresses(lsp string, address string) (ovnbindings.OVNCommandInterface, error) {
 	return &MockOVNCommand{
 		Exe:     mock,
 		op:      OpUpdate,
@@ -150,7 +150,7 @@ func (mock *MockOVNClient) LSPGetDynamicAddresses(lsp string) (string, error) {
 }
 
 // Set external_ids for LSP
-func (mock *MockOVNClient) LSPSetExternalIds(lsp string, external_ids map[string]string) (util.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetExternalIds(lsp string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
 	return &MockOVNCommand{
 		Exe:     mock,
 		op:      OpUpdate,
@@ -186,51 +186,54 @@ func (mock *MockOVNClient) LSPGetExternalIds(lsp string) (map[string]string, err
 
 // helper function that applies field updates for a given lsp to the mock object cache
 func (mock *MockOVNClient) updateLSPCache(lspName string, update UpdateCache, mockCache MockObjectCacheByName) error {
-	var err error = nil
-	if entry, ok := mockCache[lspName]; !ok {
-		err = fmt.Errorf("error updating LSP with name %s, LSP doesn't exist", lspName)
-	} else {
-		if lsp, ok := entry.(*goovn.LogicalSwitchPort); !ok {
-			err = fmt.Errorf("type assertion failed for LSP cache entry")
-		} else {
-			switch update.FieldType {
-			case LogicalSwitchPortAddresses:
-				klog.V(5).Infof("Setting addresses for LSP %s", lspName)
-				if addresses, ok := update.FieldValue.([]string); ok {
-					lsp.Addresses = addresses
-				} else {
-					err = fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
-				}
-			case LogicalSwitchPortDynamicAddresses:
-				if dynaddr, ok := update.FieldValue.(string); ok {
-					klog.V(5).Infof("Setting dynamic address for LSP %s to %s", lspName, dynaddr)
-					lsp.DynamicAddresses = dynaddr
-				} else {
-					err = fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
-				}
-			case LogicalSwitchPortPortSecurity:
-				klog.V(5).Infof("Setting port security for LSP %s", lsp)
-				if addresses, ok := update.FieldValue.([]string); ok {
-					lsp.PortSecurity = addresses
-				} else {
-					err = fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
-				}
-			case LogicalSwitchPortExternalId:
-				klog.V(5).Infof("Setting external id for LSP %s", lspName)
-				if extIds, ok := update.FieldValue.(map[string]string); ok {
-					extMap := make(map[interface{}]interface{})
-					for k, v := range extIds {
-						extMap[k] = v
-					}
-					lsp.ExternalID = extMap
-				} else {
-					err = fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
-				}
-			default:
-				err = fmt.Errorf("unrecognized field type: %s", update.FieldType)
-			}
+	var entry interface{}
+	var lsp *goovn.LogicalSwitchPort
+	var ok bool
 
-		}
+	if entry, ok = mockCache[lspName]; !ok {
+		return fmt.Errorf("error updating LSP with name %s, LSP doesn't exist", lspName)
 	}
-	return err
+
+	if lsp, ok = entry.(*goovn.LogicalSwitchPort); !ok {
+		panic("type assertion failed for LSP cache entry")
+	}
+
+	switch update.FieldType {
+	case LogicalSwitchPortAddresses:
+		klog.V(5).Infof("Setting addresses for LSP %s", lspName)
+		if addresses, ok := update.FieldValue.([]string); ok {
+			lsp.Addresses = addresses
+		} else {
+			return fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
+		}
+	case LogicalSwitchPortDynamicAddresses:
+		if dynaddr, ok := update.FieldValue.(string); ok {
+			klog.V(5).Infof("Setting dynamic address for LSP %s to %s", lspName, dynaddr)
+			lsp.DynamicAddresses = dynaddr
+		} else {
+			return fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
+		}
+	case LogicalSwitchPortPortSecurity:
+		klog.V(5).Infof("Setting port security for LSP %s", lsp)
+		if addresses, ok := update.FieldValue.([]string); ok {
+			lsp.PortSecurity = addresses
+		} else {
+			return fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
+		}
+	case LogicalSwitchPortExternalId:
+		klog.V(5).Infof("Setting external id for LSP %s", lspName)
+		if extIds, ok := update.FieldValue.(map[string]string); ok {
+			extMap := make(map[interface{}]interface{})
+			for k, v := range extIds {
+				extMap[k] = v
+			}
+			lsp.ExternalID = extMap
+		} else {
+			return fmt.Errorf("type assertion failed for LSP field: %s", update.FieldType)
+		}
+	default:
+		return fmt.Errorf("unrecognized field type: %s", update.FieldType)
+	}
+
+	return nil
 }

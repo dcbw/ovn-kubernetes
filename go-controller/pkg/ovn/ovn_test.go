@@ -5,9 +5,10 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/factory"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
 	ovntest "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing"
-	mock "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/testing/mocks"
 	util "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
+	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 
 	"github.com/urfave/cli/v2"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,7 +19,7 @@ const (
 	k8sTCPLoadBalancerIP  = "k8s_tcp_load_balancer"
 	k8sUDPLoadBalancerIP  = "k8s_udp_load_balancer"
 	k8sSCTPLoadBalancerIP = "k8s_sctp_load_balancer"
-	fakeUUID              = mock.FakeUUID
+	fakeUUID              = testing.FakeUUID
 )
 
 type FakeOVN struct {
@@ -28,8 +29,8 @@ type FakeOVN struct {
 	stopChan    chan struct{}
 	fakeExec    *ovntest.FakeExec
 	asf         *fakeAddressSetFactory
-	ovnNBClient util.OVNInterface
-	ovnSBClient util.OVNInterface
+	ovnNBClient ovnbindings.OVNInterface
+	ovnSBClient ovnbindings.OVNInterface
 }
 
 func NewFakeOVN(fexec *ovntest.FakeExec) *FakeOVN {
@@ -69,8 +70,8 @@ func (o *FakeOVN) init() {
 	o.stopChan = make(chan struct{})
 	o.watcher, err = factory.NewWatchFactory(o.fakeClient)
 	Expect(err).NotTo(HaveOccurred())
-	o.ovnNBClient = mock.NewMockOVNClient(goovn.DBNB)
-	o.ovnSBClient = mock.NewMockOVNClient(goovn.DBSB)
+	o.ovnNBClient = ovntest.NewMockOVNClient(goovn.DBNB)
+	o.ovnSBClient = ovntest.NewMockOVNClient(goovn.DBSB)
 	o.controller = NewOvnController(o.fakeClient, o.watcher,
 		o.stopChan, o.asf, o.ovnNBClient,
 		o.ovnSBClient)
@@ -78,30 +79,34 @@ func (o *FakeOVN) init() {
 
 }
 
-func mockAddNBDBError(table, name, field string, err error, ovnNBClient util.OVNInterface) {
-	mockClient, ok := ovnNBClient.(*mock.MockOVNClient)
-	if ok {
-		mockClient.AddToErrorCache(table, name, field, err)
+func mockAddNBDBError(table, name, field string, err error, ovnNBClient ovnbindings.OVNInterface) {
+	mockClient, ok := ovnNBClient.(*ovntest.MockOVNClient)
+	if !ok {
+		panic("type assertion failed for mock NB client")
 	}
+	mockClient.AddToErrorCache(table, name, field, err)
 }
 
-func mockAddSBDBError(table, name, field string, err error, ovnSBClient util.OVNInterface) {
-	mockClient, ok := ovnSBClient.(*mock.MockOVNClient)
-	if ok {
-		mockClient.AddToErrorCache(table, name, field, err)
+func mockAddSBDBError(table, name, field string, err error, ovnSBClient ovnbindings.OVNInterface) {
+	mockClient, ok := ovnSBClient.(*ovntest.MockOVNClient)
+	if !ok {
+		panic("type assertion failed for mock SB client")
 	}
+	mockClient.AddToErrorCache(table, name, field, err)
 }
 
-func mockDelNBDBError(table, name, field string, ovnNBClient util.OVNInterface) {
-	mockClient, ok := ovnNBClient.(*mock.MockOVNClient)
-	if ok {
-		mockClient.RemoveFromErrorCache(table, name, field)
+func mockDelNBDBError(table, name, field string, ovnNBClient ovnbindings.OVNInterface) {
+	mockClient, ok := ovnNBClient.(*ovntest.MockOVNClient)
+	if !ok {
+		panic("type assertion failed for mock NB client")
 	}
+	mockClient.RemoveFromErrorCache(table, name, field)
 }
 
-func mockDelSBDBError(table, name, field string, ovnSBClient util.OVNInterface) {
-	mockClient, ok := ovnSBClient.(*mock.MockOVNClient)
-	if ok {
-		mockClient.RemoveFromErrorCache(table, name, field)
+func mockDelSBDBError(table, name, field string, ovnSBClient ovnbindings.OVNInterface) {
+	mockClient, ok := ovnSBClient.(*ovntest.MockOVNClient)
+	if !ok {
+		panic("type assertion failed for mock SB client")
 	}
+	mockClient.RemoveFromErrorCache(table, name, field)
 }
