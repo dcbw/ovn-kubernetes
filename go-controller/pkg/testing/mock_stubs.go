@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	goovn "github.com/ebay/go-ovn"
-	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 )
 
 // TODO: implement mock methods as we keep adding unit-tests
@@ -14,12 +13,12 @@ func (mock *MockOVNClient) LSGet(ls string) ([]*goovn.LogicalSwitch, error) {
 }
 
 // Create ls named SWITCH
-func (mock *MockOVNClient) LSAdd(ls string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSAdd(ls string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Del ls and all its ports
-func (mock *MockOVNClient) LSDel(ls string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSDel(ls string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -29,27 +28,27 @@ func (mock *MockOVNClient) LSList() ([]*goovn.LogicalSwitch, error) {
 }
 
 // Add external_ids to logical switch
-func (mock *MockOVNClient) LSExtIdsAdd(ls string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSExtIdsAdd(ls string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Del external_ids from logical_switch
-func (mock *MockOVNClient) LSExtIdsDel(ls string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSExtIdsDel(ls string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Link logical switch to router
-func (mock *MockOVNClient) LinkSwitchToRouter(lsw, lsp, lr, lrp, lrpMac string, networks []string, externalIds map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LinkSwitchToRouter(lsw, lsp, lr, lrp, lrpMac string, networks []string, externalIds map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Add LB to LSW
-func (mock *MockOVNClient) LSLBAdd(ls string, lb string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSLBAdd(ls string, lb string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete LB from LSW
-func (mock *MockOVNClient) LSLBDel(ls string, lb string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSLBDel(ls string, lb string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -59,12 +58,12 @@ func (mock *MockOVNClient) LSLBList(ls string) ([]*goovn.LoadBalancer, error) {
 }
 
 // Add ACL
-func (mock *MockOVNClient) ACLAdd(ls, direct, match, action string, priority int, external_ids map[string]string, logflag bool, meter string, severity string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) ACLAdd(ls, direct, match, action string, priority int, external_ids map[string]string, logflag bool, meter string, severity string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete acl
-func (mock *MockOVNClient) ACLDel(ls, direct, match string, priority int, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) ACLDel(ls, direct, match string, priority int, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -79,17 +78,17 @@ func (mock *MockOVNClient) ASGet(name string) (*goovn.AddressSet, error) {
 }
 
 // Update address set
-func (mock *MockOVNClient) ASUpdate(name string, addrs []string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) ASUpdate(name string, addrs []string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Add addressset
-func (mock *MockOVNClient) ASAdd(name string, addrs []string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) ASAdd(name string, addrs []string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete addressset
-func (mock *MockOVNClient) ASDel(name string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) ASDel(name string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -104,12 +103,12 @@ func (mock *MockOVNClient) LRGet(name string) ([]*goovn.LogicalRouter, error) {
 }
 
 // Add LR with given name
-func (mock *MockOVNClient) LRAdd(name string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRAdd(name string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete LR with given name
-func (mock *MockOVNClient) LRDel(name string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRDel(name string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -119,12 +118,12 @@ func (mock *MockOVNClient) LRList() ([]*goovn.LogicalRouter, error) {
 }
 
 // Add LRP with given name on given lr
-func (mock *MockOVNClient) LRPAdd(lr string, lrp string, mac string, network []string, peer string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRPAdd(lr string, lrp string, mac string, network []string, peer string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete LRP with given name on given lr
-func (mock *MockOVNClient) LRPDel(lr string, lrp string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRPDel(lr string, lrp string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -134,12 +133,12 @@ func (mock *MockOVNClient) LRPList(lr string) ([]*goovn.LogicalRouterPort, error
 }
 
 // Add LRSR with given ip_prefix on given lr
-func (mock *MockOVNClient) LRSRAdd(lr string, ip_prefix string, nexthop string, output_port []string, policy []string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRSRAdd(lr string, ip_prefix string, nexthop string, output_port []string, policy []string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete LRSR with given ip_prefix on given lr
-func (mock *MockOVNClient) LRSRDel(lr string, ip_prefix string, nexthop, policy, outputPort *string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRSRDel(lr string, ip_prefix string, nexthop, policy, outputPort *string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -149,12 +148,12 @@ func (mock *MockOVNClient) LRSRList(lr string) ([]*goovn.LogicalRouterStaticRout
 }
 
 // Add LB to LR
-func (mock *MockOVNClient) LRLBAdd(lr string, lb string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRLBAdd(lr string, lb string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete LB from LR
-func (mock *MockOVNClient) LRLBDel(lr string, lb string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRLBDel(lr string, lb string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -169,32 +168,32 @@ func (mock *MockOVNClient) LBGet(name string) ([]*goovn.LoadBalancer, error) {
 }
 
 // Add LB
-func (mock *MockOVNClient) LBAdd(name string, vipPort string, protocol string, addrs []string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LBAdd(name string, vipPort string, protocol string, addrs []string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete LB with given name
-func (mock *MockOVNClient) LBDel(name string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LBDel(name string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Update existing LB
-func (mock *MockOVNClient) LBUpdate(name string, vipPort string, protocol string, addrs []string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LBUpdate(name string, vipPort string, protocol string, addrs []string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Add dhcp options for cidr and provided external_ids
-func (mock *MockOVNClient) DHCPOptionsAdd(cidr string, options map[string]string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) DHCPOptionsAdd(cidr string, options map[string]string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Set dhcp options and set external_ids for specific uuid
-func (mock *MockOVNClient) DHCPOptionsSet(uuid string, options map[string]string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) DHCPOptionsSet(uuid string, options map[string]string, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Del dhcp options via provided external_ids
-func (mock *MockOVNClient) DHCPOptionsDel(uuid string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) DHCPOptionsDel(uuid string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -209,12 +208,12 @@ func (mock *MockOVNClient) DHCPOptionsList() ([]*goovn.DHCPOptions, error) {
 }
 
 // Add qos rule
-func (mock *MockOVNClient) QoSAdd(ls string, direction string, priority int, match string, action map[string]int, bandwidth map[string]int, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) QoSAdd(ls string, direction string, priority int, match string, action map[string]int, bandwidth map[string]int, external_ids map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Del qos rule, to delete wildcard specify priority -1 and string options as ""
-func (mock *MockOVNClient) QoSDel(ls string, direction string, priority int, match string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) QoSDel(ls string, direction string, priority int, match string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -224,12 +223,12 @@ func (mock *MockOVNClient) QoSList(ls string) ([]*goovn.QoS, error) {
 }
 
 //Add NAT to Logical Router
-func (mock *MockOVNClient) LRNATAdd(lr string, ntype string, externalIp string, logicalIp string, external_ids map[string]string, logicalPortAndExternalMac ...string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRNATAdd(lr string, ntype string, externalIp string, logicalIp string, external_ids map[string]string, logicalPortAndExternalMac ...string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 //Del NAT from Logical Router
-func (mock *MockOVNClient) LRNATDel(lr string, ntype string, ip ...string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LRNATDel(lr string, ntype string, ip ...string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -239,12 +238,12 @@ func (mock *MockOVNClient) LRNATList(lr string) ([]*goovn.NAT, error) {
 }
 
 // Add Meter with a Meter Band
-func (mock *MockOVNClient) MeterAdd(name, action string, rate int, unit string, external_ids map[string]string, burst int) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) MeterAdd(name, action string, rate int, unit string, external_ids map[string]string, burst int) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Deletes meters
-func (mock *MockOVNClient) MeterDel(name ...string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) MeterDel(name ...string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -260,12 +259,12 @@ func (mock *MockOVNClient) MeterBandsList() ([]*goovn.MeterBand, error) {
 
 // Add chassis with given name
 func (mock *MockOVNClient) ChassisAdd(name string, hostname string, etype []string, ip string, external_ids map[string]string,
-	transport_zones []string, vtep_lswitches []string) (ovnbindings.OVNCommandInterface, error) {
+	transport_zones []string, vtep_lswitches []string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
 // Delete chassis with given name
-func (mock *MockOVNClient) ChassisDel(chName string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) ChassisDel(chName string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -280,7 +279,7 @@ func (mock *MockOVNClient) EncapList(chname string) ([]*goovn.Encap, error) {
 }
 
 // Set NB_Global table options
-func (mock *MockOVNClient) NBGlobalSetOptions(options map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) NBGlobalSetOptions(options map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -290,7 +289,7 @@ func (mock *MockOVNClient) NBGlobalGetOptions() (map[string]string, error) {
 }
 
 // Set SB_Global table options
-func (mock *MockOVNClient) SBGlobalSetOptions(options map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) SBGlobalSetOptions(options map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 

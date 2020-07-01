@@ -11,7 +11,6 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/config"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/metrics"
 	util "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
-	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 	kapi "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog"
@@ -236,7 +235,7 @@ func (oc *Controller) addLogicalPort(pod *kapi.Pod) error {
 
 	var podMac net.HardwareAddr
 	var podIfAddrs []*net.IPNet
-	var cmds []ovnbindings.OVNCommandInterface
+	var cmds []*goovn.OvnCommand
 	var addresses []string
 
 	// Check if the pod's logical switch port already exists. If it

@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"syscall"
 
+	goovn "github.com/ebay/go-ovn"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 	aggErrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/klog"
@@ -30,9 +31,13 @@ type UpdateCache struct {
 // object cache for mock ovn client
 type MockObjectCacheByName map[string]interface{}
 
-// provides Execute() interface
-type MockExecution interface {
-	Execute(cmds ...ovnbindings.OVNCommandInterface) error
+type MockExecution struct {
+	handler   mockExecutionHandler
+	op        string
+	table     string
+	objName   string
+	obj       interface{}
+	objUpdate UpdateCache
 }
 
 // mock ovn client for testing
@@ -47,19 +52,14 @@ type MockOVNClient struct {
 	connected bool
 }
 
-var _ ovnbindings.OVNInterface = &MockOVNClient{}
-
-type MockOVNCommand struct {
-	Exe       MockExecution
-	op        string
-	table     string
-	objName   string
-	obj       interface{}
-	objUpdate UpdateCache
+type mockExecutionHandler interface {
+	ExecuteMockCommand(*MockExecution) error
 }
 
+var _ ovnbindings.OVNInterface = &MockOVNClient{}
+
 // MockOVNCommand implements OVNCommandInterface
-var _ ovnbindings.OVNCommandInterface = &MockOVNCommand{}
+var _ goovn.Execution = &MockExecution{}
 
 // return a new mock client to operate on db
 func NewMockOVNClient(db string) *MockOVNClient {
@@ -89,9 +89,42 @@ func (mock *MockOVNClient) Close() error {
 	return nil
 }
 
+func (mock *MockOVNClient) ExecuteMockCommand(e *MockExecution) error {
+	var (
+		cache MockObjectCacheByName
+		ok    bool
+	)
+	switch e.op {
+	case OpAdd:
+		if cache, ok = mock.cache[e.table]; !ok {
+			cache = make(MockObjectCacheByName)
+			mock.cache[e.table] = cache
+		}
+		if _, exists := cache[e.objName]; exists {
+			return fmt.Errorf("object %s of type %s exists in cache", e.objName, e.table)
+		}
+		cache[e.objName] = e.obj
+	case OpDelete:
+		if cache, ok = mock.cache[e.table]; !ok {
+			return fmt.Errorf("command to delete entry from %s when cache doesn't exist", e.table)
+		}
+		delete(cache, e.objName)
+	case OpUpdate:
+		if cache, ok = mock.cache[e.table]; !ok {
+			return fmt.Errorf("command to delete entry from %s when cache doesn't exist", e.table)
+		}
+		if err := mock.updateCache(e.table, e.objName, e.objUpdate, cache); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("invalid command op: %s", e.op)
+	}
+	return nil
+}
+
 // Exec command, support multiple commands in one transaction.
 // executes commands ensuring their temporal consistency
-func (mock *MockOVNClient) Execute(cmds ...ovnbindings.OVNCommandInterface) error {
+func (mock *MockOVNClient) Execute(cmds ...*goovn.OvnCommand) error {
 	if !mock.connected {
 		return syscall.ENOTCONN
 	}
@@ -101,44 +134,14 @@ func (mock *MockOVNClient) Execute(cmds ...ovnbindings.OVNCommandInterface) erro
 		// go over each mock command and apply the
 		// individual command's operations to the
 		// cache
-		ovnCmd, ok := cmd.(*MockOVNCommand)
+		exe, ok := cmd.Exe.(*MockExecution)
 		if !ok {
-			klog.Errorf("Type assertion failed for mock command")
-			panic("type assertion failed for mock command")
+			klog.Errorf("Type assertion failed for mock execution")
+			panic("type assertion failed for mock execution")
 		}
-		var cache MockObjectCacheByName
-		switch ovnCmd.op {
-		case OpAdd:
-			if cache, ok = mock.cache[ovnCmd.table]; !ok {
-				cache = make(MockObjectCacheByName)
-				mock.cache[ovnCmd.table] = cache
-			}
-			if _, exists := cache[ovnCmd.objName]; exists {
-				errors = append(errors,
-					fmt.Errorf("object %s of type %s exists in cache", ovnCmd.objName, ovnCmd.table))
-			}
-			cache[ovnCmd.objName] = ovnCmd.obj
-		case OpDelete:
-			if cache, ok = mock.cache[ovnCmd.table]; !ok {
-				errors = append(errors,
-					fmt.Errorf("command to delete entry from %s when cache doesn't exist", ovnCmd.table))
-				continue
-			}
-			delete(cache, ovnCmd.objName)
-		case OpUpdate:
-			if cache, ok = mock.cache[ovnCmd.table]; !ok {
-				errors = append(errors,
-					fmt.Errorf("command to delete entry from %s when cache doesn't exist", ovnCmd.table))
-				continue
-			}
-			if err := mock.updateCache(ovnCmd.table, ovnCmd.objName, ovnCmd.objUpdate, cache); err != nil {
-				errors = append(errors, err)
-			}
-		default:
-			errors = append(errors,
-				fmt.Errorf("invalid command op: %s", ovnCmd.op))
+		if err := mock.ExecuteMockCommand(exe); err != nil {
+			errors = append(errors, err)
 		}
-
 	}
 	return aggErrors.NewAggregate(errors)
 }
@@ -180,6 +183,12 @@ func (mock *MockOVNClient) RemoveFromErrorCache(table, name, fieldType string) {
 	delete(mock.errorCache, key)
 }
 
-func (cmd *MockOVNCommand) Execute() error {
-	return cmd.Exe.Execute(cmd)
+func (e *MockExecution) Execute(cmds ...*goovn.OvnCommand) error {
+	if len(cmds) > 1 {
+		panic("Unexpected number of commands passed to MockExecution object")
+	}
+	if e != cmds[0].Exe {
+		panic("Unexpected MockExecution mismatch")
+	}
+	return e.handler.ExecuteMockCommand(e)
 }

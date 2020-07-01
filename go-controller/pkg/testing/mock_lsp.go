@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	goovn "github.com/ebay/go-ovn"
-	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util/ovnbindings"
 	"k8s.io/klog"
 )
 
@@ -36,55 +35,62 @@ func (mock *MockOVNClient) LSPGet(lsp string) (*goovn.LogicalSwitchPort, error) 
 }
 
 // Add logical port PORT on SWITCH
-func (mock *MockOVNClient) LSPAdd(ls string, lsp string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPAdd(ls string, lsp string) (*goovn.OvnCommand, error) {
 	klog.V(5).Infof("Adding lsp %s to switch %s", lsp, ls)
-	return &MockOVNCommand{
-		Exe:     mock,
-		op:      OpAdd,
-		table:   LogicalSwitchPortType,
-		objName: lsp,
-		obj:     &goovn.LogicalSwitchPort{Name: lsp, UUID: FakeUUID},
+	return &goovn.OvnCommand{
+		Exe: &MockExecution{
+			handler: mock,
+			op:      OpAdd,
+			table:   LogicalSwitchPortType,
+			objName: lsp,
+			obj:     &goovn.LogicalSwitchPort{Name: lsp, UUID: FakeUUID},
+		},
 	}, nil
 }
 
 // Delete PORT from its attached switch
-func (mock *MockOVNClient) LSPDel(lsp string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPDel(lsp string) (*goovn.OvnCommand, error) {
 	klog.V(5).Infof("Deleting lsp %s", lsp)
-	return &MockOVNCommand{
-		Exe:     mock,
-		op:      OpDelete,
-		table:   LogicalSwitchPortType,
-		objName: lsp,
+	return &goovn.OvnCommand{
+		Exe: &MockExecution{
+			handler: mock,
+			op:      OpDelete,
+			table:   LogicalSwitchPortType,
+			objName: lsp,
+		},
 	}, nil
 }
 
 // Set addresses per lport
-func (mock *MockOVNClient) LSPSetAddress(lsp string, addresses ...string) (ovnbindings.OVNCommandInterface, error) {
-	return &MockOVNCommand{
-		Exe:     mock,
-		op:      OpUpdate,
-		table:   LogicalSwitchPortType,
-		objName: lsp,
-		objUpdate: UpdateCache{
-			FieldType:  LogicalSwitchPortAddresses,
-			FieldValue: addresses,
+func (mock *MockOVNClient) LSPSetAddress(lsp string, addresses ...string) (*goovn.OvnCommand, error) {
+	return &goovn.OvnCommand{
+		Exe: &MockExecution{
+			handler: mock,
+			op:      OpUpdate,
+			table:   LogicalSwitchPortType,
+			objName: lsp,
+			objUpdate: UpdateCache{
+				FieldType:  LogicalSwitchPortAddresses,
+				FieldValue: addresses,
+			},
 		},
 	}, nil
 }
 
 // Set port security per lport
-func (mock *MockOVNClient) LSPSetPortSecurity(lsp string, security ...string) (ovnbindings.OVNCommandInterface, error) {
-	return &MockOVNCommand{
-		Exe:     mock,
-		op:      OpUpdate,
-		table:   LogicalSwitchPortType,
-		objName: lsp,
-		objUpdate: UpdateCache{
-			FieldType:  LogicalSwitchPortPortSecurity,
-			FieldValue: security,
+func (mock *MockOVNClient) LSPSetPortSecurity(lsp string, security ...string) (*goovn.OvnCommand, error) {
+	return &goovn.OvnCommand{
+		Exe: &MockExecution{
+			handler: mock,
+			op:      OpUpdate,
+			table:   LogicalSwitchPortType,
+			objName: lsp,
+			objUpdate: UpdateCache{
+				FieldType:  LogicalSwitchPortPortSecurity,
+				FieldValue: security,
+			},
 		},
 	}, nil
-
 }
 
 // Get all lport by lswitch
@@ -93,7 +99,7 @@ func (mock *MockOVNClient) LSPList(ls string) ([]*goovn.LogicalSwitchPort, error
 }
 
 // Set dhcp4_options uuid on lsp
-func (mock *MockOVNClient) LSPSetDHCPv4Options(lsp string, options string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetDHCPv4Options(lsp string, options string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -103,7 +109,7 @@ func (mock *MockOVNClient) LSPGetDHCPv4Options(lsp string) (*goovn.DHCPOptions, 
 }
 
 // Set dhcp6_options uuid on lsp
-func (mock *MockOVNClient) LSPSetDHCPv6Options(lsp string, options string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetDHCPv6Options(lsp string, options string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -113,7 +119,7 @@ func (mock *MockOVNClient) LSPGetDHCPv6Options(lsp string) (*goovn.DHCPOptions, 
 }
 
 // Set options in LSP
-func (mock *MockOVNClient) LSPSetOptions(lsp string, options map[string]string) (ovnbindings.OVNCommandInterface, error) {
+func (mock *MockOVNClient) LSPSetOptions(lsp string, options map[string]string) (*goovn.OvnCommand, error) {
 	return nil, fmt.Errorf("method %s is not implemented yet", functionName())
 }
 
@@ -123,15 +129,17 @@ func (mock *MockOVNClient) LSPGetOptions(lsp string) (map[string]string, error) 
 }
 
 // Set dynamic addresses in LSP
-func (mock *MockOVNClient) LSPSetDynamicAddresses(lsp string, address string) (ovnbindings.OVNCommandInterface, error) {
-	return &MockOVNCommand{
-		Exe:     mock,
-		op:      OpUpdate,
-		table:   LogicalSwitchPortType,
-		objName: lsp,
-		objUpdate: UpdateCache{
-			FieldType:  LogicalSwitchPortDynamicAddresses,
-			FieldValue: address,
+func (mock *MockOVNClient) LSPSetDynamicAddresses(lsp string, address string) (*goovn.OvnCommand, error) {
+	return &goovn.OvnCommand{
+		Exe: &MockExecution{
+			handler: mock,
+			op:      OpUpdate,
+			table:   LogicalSwitchPortType,
+			objName: lsp,
+			objUpdate: UpdateCache{
+				FieldType:  LogicalSwitchPortDynamicAddresses,
+				FieldValue: address,
+			},
 		},
 	}, nil
 
@@ -150,15 +158,17 @@ func (mock *MockOVNClient) LSPGetDynamicAddresses(lsp string) (string, error) {
 }
 
 // Set external_ids for LSP
-func (mock *MockOVNClient) LSPSetExternalIds(lsp string, external_ids map[string]string) (ovnbindings.OVNCommandInterface, error) {
-	return &MockOVNCommand{
-		Exe:     mock,
-		op:      OpUpdate,
-		table:   LogicalSwitchPortType,
-		objName: lsp,
-		objUpdate: UpdateCache{
-			FieldType:  LogicalSwitchPortExternalId,
-			FieldValue: external_ids,
+func (mock *MockOVNClient) LSPSetExternalIds(lsp string, external_ids map[string]string) (*goovn.OvnCommand, error) {
+	return &goovn.OvnCommand{
+		Exe: &MockExecution{
+			handler: mock,
+			op:      OpUpdate,
+			table:   LogicalSwitchPortType,
+			objName: lsp,
+			objUpdate: UpdateCache{
+				FieldType:  LogicalSwitchPortExternalId,
+				FieldValue: external_ids,
+			},
 		},
 	}, nil
 }
